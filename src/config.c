@@ -1,3 +1,8 @@
+#ifdef _WIN32
+#include <windows.h>
+#include <share.h>
+#endif
+#include <errno.h>
 #include "config.h"
 #include "types.h"
 #include <stdio.h>
@@ -520,46 +525,66 @@ static bool ParseOneConfigFile(const char *filename, int depth) {
 }
 
 char g_config_file_path[1024] = "zelda3.ini";
+char g_last_save_error[256] = "";
+static char *g_keymap_backup_data = NULL;
 
 void ParseConfigFile(const char *filename) {
   g_config.msuvolume = 100;  // default msu volume, 100%
   g_config.master_volume = 100; // default master volume, 100%
 
+  if (filename == NULL)
+    filename = g_config_file_path;
+
+  // Cache keymap / gamepadmap once at startup before parser modifies buffer
+  size_t file_len = 0;
+  uint8 *raw_ini = ReadWholeFile(filename, &file_len);
+  if (!raw_ini && strcmp(filename, "zelda3.ini") != 0) {
+    raw_ini = ReadWholeFile("zelda3.ini", &file_len);
+  }
+  if (raw_ini) {
+    char *kmap = strstr((char*)raw_ini, "[KeyMap]");
+    if (!kmap) kmap = strstr((char*)raw_ini, "[keymap]");
+    if (kmap) {
+      if (g_keymap_backup_data) free(g_keymap_backup_data);
+      g_keymap_backup_data = strdup(kmap);
+    }
+    free(raw_ini);
+  }
+
   if (filename != NULL || !ParseOneConfigFile("zelda3.user.ini", 0)) {
-    if (filename == NULL)
-      filename = g_config_file_path;
     if (!ParseOneConfigFile(filename, 0))
       fprintf(stderr, "Warning: Unable to read config file %s\n", filename);
   }
   RegisterDefaultKeys();
 }
 
-void SaveConfigFile(const char *filename) {
+bool SaveConfigFile(const char *filename) {
   if (!filename || !*filename) filename = g_config_file_path;
+  g_last_save_error[0] = '\0';
 
-  // Read existing KeyMap / GamepadMap if file exists so custom bindings are never lost
-  char *keymap_data = NULL;
-  size_t file_len = 0;
-  uint8 *existing_file = ReadWholeFile(filename, &file_len);
-  if (!existing_file) {
-    existing_file = ReadWholeFile("zelda3.ini", &file_len);
-  }
-  if (existing_file) {
-    char *kmap = strstr((char*)existing_file, "[KeyMap]");
-    if (!kmap) kmap = strstr((char*)existing_file, "[keymap]");
-    if (kmap) {
-      keymap_data = strdup(kmap);
-    }
-    free(existing_file);
-  }
+  char temp_path[1024];
+  snprintf(temp_path, sizeof(temp_path), "%s.tmp", filename);
 
-  FILE *f = fopen(filename, "w");
+  FILE *f = fopen(temp_path, "w");
+  bool used_temp = true;
   if (!f) {
-    f = fopen("zelda3.ini", "w");
+    used_temp = false;
+    temp_path[0] = '\0';
+#ifdef _WIN32
+    f = _fsopen(filename, "w", _SH_DENYNO);
+#else
+    f = fopen(filename, "w");
+#endif
     if (!f) {
-      if (keymap_data) free(keymap_data);
-      fprintf(stderr, "Error: Unable to open '%s' for saving!\n", filename);
-      return;
+      f = fopen("zelda3.ini", "w");
+    }
+    if (!f) {
+      snprintf(g_last_save_error, sizeof(g_last_save_error),
+               "Acesso negado (Windows Defender/Permissao, win_err: %lu)",
+               (unsigned long)GetLastError());
+      fprintf(stderr, "Error: Unable to open '%s' for saving! (%s)\n",
+              filename, g_last_save_error);
+      return false;
     }
   }
 
@@ -637,9 +662,8 @@ void SaveConfigFile(const char *filename) {
   fprintf(f, "GameChangingBugFixes = %d\n", (g_config.features0 & kFeatures0_GameChangingBugFixes) ? 1 : 0);
   fprintf(f, "CancelBirdTravel = %d\n", (g_config.features0 & kFeatures0_CancelBirdTravel) ? 1 : 0);
 
-  if (keymap_data) {
-    fprintf(f, "\n%s\n", keymap_data);
-    free(keymap_data);
+  if (g_keymap_backup_data) {
+    fprintf(f, "\n%s\n", g_keymap_backup_data);
   } else {
     fprintf(f, "\n[KeyMap]\n");
     fprintf(f, "Controls = Up, Down, Left, Right, Right Shift, Return, x, z, s, a, c, v\n");
@@ -654,5 +678,41 @@ void SaveConfigFile(const char *filename) {
   }
 
   fclose(f);
+
+  if (used_temp) {
+#ifdef _WIN32
+    BOOL replaced = FALSE;
+    for (int r = 0; r < 10; r++) {
+      if (MoveFileExA(temp_path, filename, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        replaced = TRUE;
+        break;
+      }
+      Sleep(25);
+    }
+    if (!replaced) {
+      if (CopyFileA(temp_path, filename, FALSE)) {
+        DeleteFileA(temp_path);
+        replaced = TRUE;
+      } else {
+        DWORD win_err = GetLastError();
+        snprintf(g_last_save_error, sizeof(g_last_save_error),
+                 "Falha ao substituir zelda3.ini (win_err: %lu)", (unsigned long)win_err);
+        fprintf(stderr, "Warning: Failed to replace '%s' with '%s' (win_err: %lu)\n",
+                filename, temp_path, (unsigned long)win_err);
+      }
+    }
+    return replaced ? true : false;
+#else
+    if (rename(temp_path, filename) == 0) {
+      return true;
+    } else {
+      fprintf(stderr, "Warning: Failed to rename '%s' to '%s'\n", temp_path, filename);
+      return false;
+    }
+#endif
+  }
+
+  return true;
 }
+
 

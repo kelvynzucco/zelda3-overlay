@@ -23,10 +23,11 @@
 /saves/sram.bak
 /zelda3
 __pycache__
-/src/*.o
+*.o
+*.tmp
+*.log
 /*.exe
 /*.out
-/snes/*.o
 /msu/
 /tmp/
 /zelda3_assets.dat

@@ -22,6 +22,37 @@ static int s_selected_save_slot = 0;
 static char s_status_message[128] = "";
 static uint32_t s_status_message_time = 0;
 
+struct ResolutionPreset {
+  const char *name;
+  int width;
+  int height;
+};
+
+static const ResolutionPreset kStandardResolutions[] = {
+  { " 512 x 448   (SNES 2x)",               512,  448  },
+  { " 640 x 480   (VGA - 4:3)",             640,  480  },
+  { " 768 x 672   (SNES 3x)",               768,  672  },
+  { " 800 x 600   (SVGA - 4:3)",            800,  600  },
+  { " 960 x 540   (qHD - 16:9)",            960,  540  },
+  { "1024 x 768   (XGA - 4:3)",             1024, 768  },
+  { "1024 x 896   (SNES 4x)",               1024, 896  },
+  { "1280 x 720   (HD 720p - 16:9)",        1280, 720  },
+  { "1280 x 800   (WXGA - 16:10)",          1280, 800  },
+  { "1280 x 960   (SXGA- - 4:3)",           1280, 960  },
+  { "1280 x 1120  (SNES 5x)",               1280, 1120 },
+  { "1366 x 768   (HD Notebook - 16:9)",    1366, 768  },
+  { "1440 x 900   (WXGA+ - 16:10)",         1440, 900  },
+  { "1600 x 900   (HD+ 900p - 16:9)",       1600, 900  },
+  { "1600 x 1200  (UXGA - 4:3)",            1600, 1200 },
+  { "1680 x 1050  (WSXGA+ - 16:10)",        1680, 1050 },
+  { "1920 x 1080  (Full HD 1080p - 16:9)",  1920, 1080 },
+  { "1920 x 1200  (WUXGA - 16:10)",         1920, 1200 },
+  { "2560 x 1440  (Quad HD 2K - 16:9)",     2560, 1440 },
+  { "2560 x 1600  (WQXGA - 16:10)",         2560, 1600 },
+  { "3840 x 2160  (Ultra HD 4K - 16:9)",    3840, 2160 },
+};
+
+
 static void SetupZeldaTheme() {
   ImGuiStyle& style = ImGui::GetStyle();
   ImVec4* colors = style.Colors;
@@ -196,12 +227,43 @@ static void RenderOverlayWindow() {
         ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "Configurações de Tela");
         ImGui::Separator();
 
-        // Escala da janela
-        int scale = g_config.window_scale;
-        if (ImGui::SliderInt("Escala da Janela (Window Scale)", &scale, 1, 6, "%dx")) {
-          g_config.window_scale = (uint8)scale;
-          SetWindowScale(scale);
+        // Resolução da Tela
+        int cur_w = g_config.window_width;
+        int cur_h = g_config.window_height;
+        if (cur_w == 0 || cur_h == 0) {
+          int s = g_config.window_scale ? g_config.window_scale : 3;
+          cur_w = (g_config.extended_aspect_ratio * 2 + 256) * s;
+          cur_h = (g_config.extend_y ? 240 : 224) * s;
         }
+
+        int selected_res_idx = -1;
+        for (size_t i = 0; i < IM_ARRAYSIZE(kStandardResolutions); i++) {
+          if (kStandardResolutions[i].width == cur_w && kStandardResolutions[i].height == cur_h) {
+            selected_res_idx = (int)i;
+            break;
+          }
+        }
+
+        char current_res_str[64];
+        if (selected_res_idx >= 0) {
+          snprintf(current_res_str, sizeof(current_res_str), "%s", kStandardResolutions[selected_res_idx].name);
+        } else {
+          snprintf(current_res_str, sizeof(current_res_str), "Personalizada (%d x %d)", cur_w, cur_h);
+        }
+
+        if (ImGui::BeginCombo("Resolução da Janela", current_res_str)) {
+          for (size_t i = 0; i < IM_ARRAYSIZE(kStandardResolutions); i++) {
+            bool is_selected = (selected_res_idx == (int)i);
+            if (ImGui::Selectable(kStandardResolutions[i].name, is_selected)) {
+              SetWindowResolution(kStandardResolutions[i].width, kStandardResolutions[i].height);
+            }
+            if (is_selected) {
+              ImGui::SetItemDefaultFocus();
+            }
+          }
+          ImGui::EndCombo();
+        }
+        ImGui::Spacing();
 
         // Fullscreen
         const char *fs_items[] = { "Janela (Windowed)", "Tela Cheia sem Bordas (Borderless)", "Tela Cheia Exclusiva (Fullscreen)" };
@@ -472,8 +534,13 @@ static void RenderOverlayWindow() {
 
     // Rodapé com botões de ação e status
     if (ImGui::Button("Salvar no zelda3.ini", ImVec2(180, 30))) {
-      SaveConfigFile(NULL);
-      SetStatus("Configurações salvas em zelda3.ini!");
+      if (SaveConfigFile(NULL)) {
+        SetStatus("Configurações salvas com sucesso!");
+      } else {
+        char err_buf[320];
+        snprintf(err_buf, sizeof(err_buf), "Erro ao salvar: %s", g_last_save_error[0] ? g_last_save_error : "Acesso negado");
+        SetStatus(err_buf);
+      }
     }
 
     ImGui::SameLine();

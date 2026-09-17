@@ -104,14 +104,17 @@ void ChangeWindowScale(int scale_step) {
   int w = new_scale * g_snes_width;
   int h = new_scale * g_snes_height;
 
+  int cur_x = 0, cur_y = 0, cur_w = 0, cur_h = 0;
+  SDL_GetWindowPosition(g_window, &cur_x, &cur_y);
+  SDL_GetWindowSize(g_window, &cur_w, &cur_h);
+  int center_x = cur_x + (cur_w > 0 ? cur_w / 2 : w / 2);
+  int center_y = cur_y + (cur_h > 0 ? cur_h / 2 : h / 2);
+
   //SDL_RenderSetLogicalSize(g_renderer, w, h);
   SDL_SetWindowSize(g_window, w, h);
   if (bt >= 0) {
-    // Center the window on top of the mouse
-    int mx, my;
-    SDL_GetGlobalMouseState(&mx, &my);
-    int wx = IntMax(IntMin(mx - w / 2, bounds.x + bounds.w - bl - br - w), bounds.x + bl);
-    int wy = IntMax(IntMin(my - h / 2, bounds.y + bounds.h - bt - bb - h), bounds.y + bt);
+    int wx = IntMax(IntMin(center_x - w / 2, bounds.x + bounds.w - bl - br - w), bounds.x + bl);
+    int wy = IntMax(IntMin(center_y - h / 2, bounds.y + bounds.h - bt - bb - h), bounds.y + bt);
     SDL_SetWindowPosition(g_window, wx, wy);
   } else {
     SDL_SetWindowPosition(g_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
@@ -125,8 +128,60 @@ void SetWindowScale(int scale) {
   }
 }
 
+void SetWindowResolution(int width, int height) {
+  g_config.window_width = width;
+  g_config.window_height = height;
+
+  if (!g_window) return;
+
+  uint32_t flags = SDL_GetWindowFlags(g_window);
+  bool is_fullscreen = (flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP)) != 0;
+
+  if (is_fullscreen) {
+    int screen = SDL_GetWindowDisplayIndex(g_window);
+    if (screen < 0) screen = 0;
+
+    SDL_DisplayMode target_mode = { 0 };
+    target_mode.w = width;
+    target_mode.h = height;
+
+    SDL_DisplayMode closest;
+    if (SDL_GetClosestDisplayMode(screen, &target_mode, &closest)) {
+      g_config.fullscreen = 2; // Exclusive Fullscreen allows hardware resolution change
+      g_win_flags |= SDL_WINDOW_FULLSCREEN;
+      g_win_flags &= ~SDL_WINDOW_FULLSCREEN_DESKTOP;
+      SDL_SetWindowFullscreen(g_window, 0);
+      SDL_SetWindowDisplayMode(g_window, &closest);
+      SDL_SetWindowFullscreen(g_window, SDL_WINDOW_FULLSCREEN);
+    }
+  } else {
+    int cur_x = 0, cur_y = 0, cur_w = 0, cur_h = 0;
+    SDL_GetWindowPosition(g_window, &cur_x, &cur_y);
+    SDL_GetWindowSize(g_window, &cur_w, &cur_h);
+    int center_x = cur_x + (cur_w > 0 ? cur_w / 2 : width / 2);
+    int center_y = cur_y + (cur_h > 0 ? cur_h / 2 : height / 2);
+
+    SDL_SetWindowSize(g_window, width, height);
+
+    int screen = SDL_GetWindowDisplayIndex(g_window);
+    if (screen < 0) screen = 0;
+    SDL_Rect bounds;
+    int bt = 31, bl = 1, bb = 1, br = 1;
+    if (SDL_GetDisplayUsableBounds(screen, &bounds) == 0) {
+      SDL_GetWindowBordersSize(g_window, &bt, &bl, &bb, &br);
+      int wx = IntMax(IntMin(center_x - width / 2, bounds.x + bounds.w - bl - br - width), bounds.x + bl);
+      int wy = IntMax(IntMin(center_y - height / 2, bounds.y + bounds.h - bt - bb - height), bounds.y + bt);
+      SDL_SetWindowPosition(g_window, wx, wy);
+    } else {
+      SDL_SetWindowPosition(g_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    }
+  }
+}
+
 void SetFullscreenMode(int mode) {
   g_config.fullscreen = (uint8)mode;
+  if (!g_window) return;
+
   if (mode == 1) {
     g_win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
     g_win_flags &= ~SDL_WINDOW_FULLSCREEN;
@@ -134,12 +189,29 @@ void SetFullscreenMode(int mode) {
   } else if (mode == 2) {
     g_win_flags |= SDL_WINDOW_FULLSCREEN;
     g_win_flags &= ~SDL_WINDOW_FULLSCREEN_DESKTOP;
+
+    if (g_config.window_width > 0 && g_config.window_height > 0) {
+      int screen = SDL_GetWindowDisplayIndex(g_window);
+      if (screen < 0) screen = 0;
+      SDL_DisplayMode target_mode = { 0 };
+      target_mode.w = g_config.window_width;
+      target_mode.h = g_config.window_height;
+      SDL_DisplayMode closest;
+      if (SDL_GetClosestDisplayMode(screen, &target_mode, &closest)) {
+        SDL_SetWindowDisplayMode(g_window, &closest);
+      }
+    }
     SDL_SetWindowFullscreen(g_window, SDL_WINDOW_FULLSCREEN);
   } else {
     g_win_flags &= ~(SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP);
     SDL_SetWindowFullscreen(g_window, 0);
+
+    if (g_config.window_width > 0 && g_config.window_height > 0) {
+      SDL_SetWindowSize(g_window, g_config.window_width, g_config.window_height);
+    }
   }
 }
+
 
 int GetMasterVolume(void) {
   return (g_sdl_audio_mixer_volume * 100) / SDL_MIX_MAXVOLUME;

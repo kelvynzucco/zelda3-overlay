@@ -31,6 +31,7 @@ void Overlay_Render(SDL_Renderer *renderer, bool is_opengl);
 
 // Window management helpers
 void SetWindowScale(int scale);
+void SetWindowResolution(int width, int height);
 void SetFullscreenMode(int mode);
 
 // Audio controls
