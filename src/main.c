@@ -117,6 +117,29 @@ void ChangeWindowScale(int scale_step) {
   }
 }
 
+void SetWindowScale(int scale) {
+  int diff = scale - g_current_window_scale;
+  if (diff != 0) {
+    ChangeWindowScale(diff);
+  }
+}
+
+void SetFullscreenMode(int mode) {
+  g_config.fullscreen = (uint8)mode;
+  if (mode == 1) {
+    g_win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+    g_win_flags &= ~SDL_WINDOW_FULLSCREEN;
+    SDL_SetWindowFullscreen(g_window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+  } else if (mode == 2) {
+    g_win_flags |= SDL_WINDOW_FULLSCREEN;
+    g_win_flags &= ~SDL_WINDOW_FULLSCREEN_DESKTOP;
+    SDL_SetWindowFullscreen(g_window, SDL_WINDOW_FULLSCREEN);
+  } else {
+    g_win_flags &= ~(SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP);
+    SDL_SetWindowFullscreen(g_window, 0);
+  }
+}
+
 #define RESIZE_BORDER 20
 static SDL_HitTestResult HitTestCallback(SDL_Window *win, const SDL_Point *pt, void *data) {
   uint32 flags = SDL_GetWindowFlags(win);
@@ -227,8 +250,6 @@ static bool SdlRenderer_Init(SDL_Window *window) {
     printf("\n");
   }
   g_renderer = renderer;
-  if (!g_config.ignore_aspect_ratio)
-    SDL_RenderSetLogicalSize(renderer, g_snes_width, g_snes_height);
   if (g_config.linear_filtering)
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "best");
 
@@ -264,7 +285,24 @@ static void SdlRenderer_EndDraw() {
 //  float v = (double)(after - before) / SDL_GetPerformanceFrequency();
 //  printf("%f ms\n", v * 1000);
   SDL_RenderClear(g_renderer);
-  SDL_RenderCopy(g_renderer, g_texture, &g_sdl_renderer_rect, NULL);
+
+  int win_w = 0, win_h = 0;
+  SDL_GetRendererOutputSize(g_renderer, &win_w, &win_h);
+  SDL_Rect dst = { 0, 0, win_w, win_h };
+
+  if (!g_config.ignore_aspect_ratio && g_sdl_renderer_rect.w > 0 && g_sdl_renderer_rect.h > 0 && win_w > 0 && win_h > 0) {
+    int draw_w = win_w, draw_h = win_h;
+    if (draw_w * g_sdl_renderer_rect.h < draw_h * g_sdl_renderer_rect.w)
+      draw_h = draw_w * g_sdl_renderer_rect.h / g_sdl_renderer_rect.w;
+    else
+      draw_w = draw_h * g_sdl_renderer_rect.w / g_sdl_renderer_rect.h;
+    dst.x = (win_w - draw_w) >> 1;
+    dst.y = (win_h - draw_h) >> 1;
+    dst.w = draw_w;
+    dst.h = draw_h;
+  }
+
+  SDL_RenderCopy(g_renderer, g_texture, &g_sdl_renderer_rect, &dst);
   Overlay_Render(g_renderer, false);
   SDL_RenderPresent(g_renderer); // vsyncs to 60 FPS?
 }

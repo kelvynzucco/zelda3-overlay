@@ -29,6 +29,10 @@ void Overlay_SetOpen(bool open);
 // Renders the overlay (must be called before SDL_RenderPresent / SDL_GL_SwapWindow)
 void Overlay_Render(SDL_Renderer *renderer, bool is_opengl);
 
+// Window management helpers
+void SetWindowScale(int scale);
+void SetFullscreenMode(int mode);
+
 #ifdef __cplusplus
 }
 #endif

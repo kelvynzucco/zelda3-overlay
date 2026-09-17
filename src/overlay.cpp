@@ -92,14 +92,15 @@ bool Overlay_Init(SDL_Window *window, SDL_Renderer *renderer, bool is_opengl) {
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+  io.IniFilename = NULL; // Keep overlay responsive to current game resolution
 
   SetupZeldaTheme();
 
-  ImGui_ImplSDL2_InitForOpenGL(window, NULL);
-
   if (!is_opengl && renderer) {
+    ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer2_Init(renderer);
   } else {
+    ImGui_ImplSDL2_InitForOpenGL(window, NULL);
     ImGui_ImplOpenGL3_Init("#version 130");
   }
 
@@ -145,8 +146,39 @@ void Overlay_SetOpen(bool open) {
 }
 
 static void RenderOverlayWindow() {
-  ImGui::SetNextWindowSize(ImVec2(680, 520), ImGuiCond_FirstUseEver);
-  ImGui::SetNextWindowPos(ImVec2(40, 40), ImGuiCond_FirstUseEver);
+  ImGuiIO& io = ImGui::GetIO();
+
+  // Dynamic responsive sizing: fits nicely regardless of window scale or resolution
+  float margin_x = 24.0f;
+  float margin_y = 20.0f;
+  float avail_w = io.DisplaySize.x - (margin_x * 2.0f);
+  float avail_h = io.DisplaySize.y - (margin_y * 2.0f);
+
+  float target_w = avail_w;
+  if (target_w > 680.0f) target_w = 680.0f;
+  if (target_w < 260.0f) target_w = (io.DisplaySize.x > 280.0f) ? io.DisplaySize.x - 16.0f : io.DisplaySize.x;
+
+  float target_h = avail_h;
+  if (target_h > 520.0f) target_h = 520.0f;
+  if (target_h < 190.0f) target_h = (io.DisplaySize.y > 210.0f) ? io.DisplaySize.y - 16.0f : io.DisplaySize.y;
+
+  float pos_x = (io.DisplaySize.x - target_w) * 0.5f;
+  float pos_y = (io.DisplaySize.y - target_h) * 0.5f;
+  if (pos_x < 8.0f) pos_x = 8.0f;
+  if (pos_y < 8.0f) pos_y = 8.0f;
+
+  ImGui::SetNextWindowSize(ImVec2(target_w, target_h), ImGuiCond_Always);
+  ImGui::SetNextWindowPos(ImVec2(pos_x, pos_y), ImGuiCond_Always);
+  ImGui::SetNextWindowSizeConstraints(ImVec2(260.0f, 190.0f), ImVec2(io.DisplaySize.x, io.DisplaySize.y));
+
+  // Dynamic UI font scaling
+  if (io.DisplaySize.y >= 1400.0f) {
+    io.FontGlobalScale = 1.4f;
+  } else if (io.DisplaySize.y < 460.0f) {
+    io.FontGlobalScale = 0.85f;
+  } else {
+    io.FontGlobalScale = 1.0f;
+  }
 
   if (ImGui::Begin("The Legend of Zelda: A Link to the Past - Configurações", &s_overlay_open, ImGuiWindowFlags_NoCollapse)) {
     if (ImGui::BeginTabBar("OverlayTabs")) {
@@ -161,6 +193,7 @@ static void RenderOverlayWindow() {
         int scale = g_config.window_scale;
         if (ImGui::SliderInt("Escala da Janela (Window Scale)", &scale, 1, 6, "%dx")) {
           g_config.window_scale = (uint8)scale;
+          SetWindowScale(scale);
         }
 
         // Fullscreen
@@ -168,6 +201,7 @@ static void RenderOverlayWindow() {
         int fs_current = g_config.fullscreen;
         if (ImGui::Combo("Modo de Exibição", &fs_current, fs_items, IM_ARRAYSIZE(fs_items))) {
           g_config.fullscreen = (uint8)fs_current;
+          SetFullscreenMode(fs_current);
         }
 
         // Aspect ratio
@@ -464,5 +498,9 @@ void Overlay_Render(SDL_Renderer *renderer, bool is_opengl) {
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
   } else if (renderer) {
     ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
+  }
+
+  if (!s_overlay_open) {
+    SDL_ShowCursor(SDL_DISABLE);
   }
 }
