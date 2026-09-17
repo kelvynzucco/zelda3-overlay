@@ -105,6 +105,7 @@ enum {
 };
 
 extern Config g_config;
+extern char g_config_file_path[1024];
 
 void ParseConfigFile(const char *filename);
 void SaveConfigFile(const char *filename);

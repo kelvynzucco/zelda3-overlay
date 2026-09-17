@@ -35,6 +35,7 @@ typedef unsigned int uint;
 #else
 #define countof(a) (sizeof(a)/sizeof(*(a)))
 #define NORETURN
+#undef FORCEINLINE
 #define FORCEINLINE inline
 #define NOINLINE
 #endif

@@ -138,12 +138,19 @@ bool Overlay_IsOpen(void) {
 void Overlay_Toggle(void) {
   s_overlay_open = !s_overlay_open;
   SDL_ShowCursor(s_overlay_open ? SDL_ENABLE : SDL_DISABLE);
+  if (!s_overlay_open) {
+    SaveConfigFile(NULL);
+  }
 }
 
 void Overlay_SetOpen(bool open) {
+  if (s_overlay_open && !open) {
+    SaveConfigFile(NULL);
+  }
   s_overlay_open = open;
   SDL_ShowCursor(s_overlay_open ? SDL_ENABLE : SDL_DISABLE);
 }
+
 
 static void RenderOverlayWindow() {
   ImGuiIO& io = ImGui::GetIO();
@@ -465,7 +472,7 @@ static void RenderOverlayWindow() {
 
     // Rodapé com botões de ação e status
     if (ImGui::Button("Salvar no zelda3.ini", ImVec2(180, 30))) {
-      SaveConfigFile("zelda3.ini");
+      SaveConfigFile(NULL);
       SetStatus("Configurações salvas em zelda3.ini!");
     }
 
@@ -510,5 +517,6 @@ void Overlay_Render(SDL_Renderer *renderer, bool is_opengl) {
 
   if (!s_overlay_open) {
     SDL_ShowCursor(SDL_DISABLE);
+    SaveConfigFile(NULL);
   }
 }

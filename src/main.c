@@ -7,6 +7,7 @@
 #ifdef _WIN32
 #include "platform/win32/volume_control.h"
 #include <direct.h>
+#include <windows.h>
 #else
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -337,6 +338,17 @@ void OpenGLRenderer_Create(struct RendererFuncs *funcs, bool use_opengl_es);
 
 #undef main
 int main(int argc, char** argv) {
+#ifdef _WIN32
+  char exe_path[MAX_PATH];
+  if (GetModuleFileNameA(NULL, exe_path, MAX_PATH) > 0) {
+    char *last_slash = strrchr(exe_path, '\\');
+    if (last_slash) {
+      *last_slash = '\0';
+      _chdir(exe_path);
+      snprintf(g_config_file_path, sizeof(g_config_file_path), "%s\\zelda3.ini", exe_path);
+    }
+  }
+#endif
   argc--, argv++;
   const char *config_file = NULL;
   if (argc >= 2 && strcmp(argv[0], "--config") == 0) {
@@ -583,9 +595,9 @@ int main(int argc, char** argv) {
   Overlay_Shutdown();
   g_renderer_funcs.Destroy();
 
+  SaveConfigFile(g_config_file_path);
   SDL_DestroyWindow(window);
   SDL_Quit();
-  //SaveConfigFile();
   return 0;
 }
 

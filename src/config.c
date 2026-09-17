@@ -519,13 +519,15 @@ static bool ParseOneConfigFile(const char *filename, int depth) {
   return true;
 }
 
+char g_config_file_path[1024] = "zelda3.ini";
+
 void ParseConfigFile(const char *filename) {
   g_config.msuvolume = 100;  // default msu volume, 100%
   g_config.master_volume = 100; // default master volume, 100%
 
   if (filename != NULL || !ParseOneConfigFile("zelda3.user.ini", 0)) {
     if (filename == NULL)
-      filename = "zelda3.ini";
+      filename = g_config_file_path;
     if (!ParseOneConfigFile(filename, 0))
       fprintf(stderr, "Warning: Unable to read config file %s\n", filename);
   }
@@ -533,9 +535,33 @@ void ParseConfigFile(const char *filename) {
 }
 
 void SaveConfigFile(const char *filename) {
-  if (!filename) filename = "zelda3.ini";
+  if (!filename || !*filename) filename = g_config_file_path;
+
+  // Read existing KeyMap / GamepadMap if file exists so custom bindings are never lost
+  char *keymap_data = NULL;
+  size_t file_len = 0;
+  uint8 *existing_file = ReadWholeFile(filename, &file_len);
+  if (!existing_file) {
+    existing_file = ReadWholeFile("zelda3.ini", &file_len);
+  }
+  if (existing_file) {
+    char *kmap = strstr((char*)existing_file, "[KeyMap]");
+    if (!kmap) kmap = strstr((char*)existing_file, "[keymap]");
+    if (kmap) {
+      keymap_data = strdup(kmap);
+    }
+    free(existing_file);
+  }
+
   FILE *f = fopen(filename, "w");
-  if (!f) return;
+  if (!f) {
+    f = fopen("zelda3.ini", "w");
+    if (!f) {
+      if (keymap_data) free(keymap_data);
+      fprintf(stderr, "Error: Unable to open '%s' for saving!\n", filename);
+      return;
+    }
+  }
 
   fprintf(f, "[General]\n");
   fprintf(f, "Autosave = %d\n", g_config.autosave ? 1 : 0);
@@ -610,6 +636,22 @@ void SaveConfigFile(const char *filename) {
   fprintf(f, "MiscBugFixes = %d\n", (g_config.features0 & kFeatures0_MiscBugFixes) ? 1 : 0);
   fprintf(f, "GameChangingBugFixes = %d\n", (g_config.features0 & kFeatures0_GameChangingBugFixes) ? 1 : 0);
   fprintf(f, "CancelBirdTravel = %d\n", (g_config.features0 & kFeatures0_CancelBirdTravel) ? 1 : 0);
+
+  if (keymap_data) {
+    fprintf(f, "\n%s\n", keymap_data);
+    free(keymap_data);
+  } else {
+    fprintf(f, "\n[KeyMap]\n");
+    fprintf(f, "Controls = Up, Down, Left, Right, Right Shift, Return, x, z, s, a, c, v\n");
+    fprintf(f, "CheatLife = w\nCheatKeys = o\nCheatWalkThroughWalls = Ctrl+e\nClearKeyLog = k\nStopReplay = l\n");
+    fprintf(f, "Fullscreen = Alt+Return\nReset = Ctrl+r\nPause = Shift+p\nPauseDimmed = p\nTurbo = Tab\nReplayTurbo = t\n");
+    fprintf(f, "WindowBigger = Ctrl+Up\nWindowSmaller = Ctrl+Down\nVolumeUp = Shift+=\nVolumeDown = Shift+-\n");
+    fprintf(f, "Load = F1, F2, F3, F4, F5, F6, F7, F8, F9, F10\n");
+    fprintf(f, "Save = Shift+F1, Shift+F2, Shift+F3, Shift+F4, Shift+F5, Shift+F6, Shift+F7, Shift+F8, Shift+F9, Shift+F10\n");
+    fprintf(f, "Replay = Ctrl+F1, Ctrl+F2, Ctrl+F3, Ctrl+F4, Ctrl+F5, Ctrl+F6, Ctrl+F7, Ctrl+F8, Ctrl+F9, Ctrl+F10\n");
+    fprintf(f, "\n[GamepadMap]\n");
+    fprintf(f, "Controls = DpadUp, DpadDown, DpadLeft, DpadRight, Back, Start, B, A, Y, X, Lb, Rb\n");
+  }
 
   fclose(f);
 }
