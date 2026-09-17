@@ -13,6 +13,11 @@
 /assets/old/
 /zelda3.sfc
 /zelda3.smc
+/ROM/
+*.sfc
+*.smc
+*.fig
+*.swc
 /saves/*.sav
 /saves/sram.dat
 /saves/sram.bak

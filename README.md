@@ -1,4 +1,17 @@
-# Zelda3
+# Zelda 3 - In-Game Overlay Edition
+
+> [!NOTE]
+> **Fork Notice & Credits:**  
+> This project is a fork of the reverse-engineered [snesrev/zelda3](https://github.com/snesrev/zelda3) by **snesrev** and contributors.  
+> All credits for the decompilation and native C reimplementation belong entirely to the original author.
+> 
+> **Overlay Edition Features:**
+> - Integrated in-game configuration overlay powered by [Dear ImGui](https://github.com/ocornut/imgui).
+> - In-game real-time settings management (Aspect Ratio, Audio/MSU-1, Controls, Cheats, Performance) without editing `.ini` files.
+> - Built-in multi-language support (including Brazilian Portuguese PT-BR).
+
+---
+
 A reimplementation of Zelda 3.
 
 Our discord server is: https://discord.gg/AJJbJAzNNJ
