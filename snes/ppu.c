@@ -720,7 +720,7 @@ static void PpuDrawMode7Upsampled(Ppu *ppu, uint y) {
   }
   size_t pitch = ppu->renderPitch;
   uint8 *render_buffer_ptr = &ppu->renderBuffer[(y - 1) * 4 * pitch];
-  uint8 *dst_start = render_buffer_ptr + (ppu->extraLeftRight - ppu->extraLeftCur) * 16;
+  uint8 *dst_start = render_buffer_ptr + (ppu->extraLeftRight > ppu->extraLeftCur ? (ppu->extraLeftRight - ppu->extraLeftCur) * 16 : 0);
   size_t draw_width = 256 + ppu->extraLeftCur + ppu->extraRightCur;
   uint8 *dst_curline = dst_start;
   uint32 m1 = ppu->m7matrix[1] << 12;  // xpos increment per vert movement
@@ -784,12 +784,12 @@ static void PpuDrawMode7Upsampled(Ppu *ppu, uint y) {
     }
   }
 
-  if (ppu->extraLeftRight - ppu->extraLeftCur != 0) {
+  if (ppu->extraLeftRight > ppu->extraLeftCur) {
     size_t n = 4 * sizeof(uint32) * (ppu->extraLeftRight - ppu->extraLeftCur);
     for(int i = 0; i < 4; i++)
       memset(render_buffer_ptr + pitch * i, 0, n);
   }
-  if (ppu->extraLeftRight - ppu->extraRightCur != 0) {
+  if (ppu->extraLeftRight > ppu->extraRightCur) {
     size_t n = 4 * sizeof(uint32) * (ppu->extraLeftRight - ppu->extraRightCur);
     for (int i = 0; i < 4; i++)
       memset(render_buffer_ptr + pitch * i + (256 + ppu->extraLeftRight * 2 - (ppu->extraLeftRight - ppu->extraRightCur)) * 4 * sizeof(uint32), 0, n);
@@ -883,7 +883,8 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
 
   uint32 *dst = (uint32*)&ppu->renderBuffer[(y - 1) * ppu->renderPitch], *dst_org = dst;
   
-  dst += (ppu->extraLeftRight - ppu->extraLeftCur);
+  if (ppu->extraLeftRight > ppu->extraLeftCur)
+    dst += (ppu->extraLeftRight - ppu->extraLeftCur);
 
   uint32 windex = 0;
   do {
@@ -940,9 +941,9 @@ static NOINLINE void PpuDrawWholeLine(Ppu *ppu, uint y) {
   } while (cw_clip_math >>= 1, ++windex < cwin.nr);
 
   // Clear out stuff on the sides.
-  if (ppu->extraLeftRight - ppu->extraLeftCur != 0)
+  if (ppu->extraLeftRight > ppu->extraLeftCur)
     memset(dst_org, 0, sizeof(uint32) * (ppu->extraLeftRight - ppu->extraLeftCur));
-  if (ppu->extraLeftRight - ppu->extraRightCur != 0)
+  if (ppu->extraLeftRight > ppu->extraRightCur)
     memset(dst_org + (256 + ppu->extraLeftRight * 2 - (ppu->extraLeftRight - ppu->extraRightCur)), 0,
         sizeof(uint32) * (ppu->extraLeftRight - ppu->extraRightCur));
 }

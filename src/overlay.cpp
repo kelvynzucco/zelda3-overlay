@@ -275,22 +275,10 @@ static void RenderOverlayWindow() {
 
         // Aspect ratio
         const char *ar_items[] = { "4:3 (Original SNES)", "16:9 (Widescreen)", "16:10", "18:9" };
-        int ar_current = 0;
-        if (g_config.extended_aspect_ratio == 43) ar_current = 1;
-        else if (g_config.extended_aspect_ratio == 32) ar_current = 2;
-        else if (g_config.extended_aspect_ratio == 64) ar_current = 3;
+        int ar_current = GetAspectRatioIndex();
 
         if (ImGui::Combo("Proporção de Tela (Aspect Ratio)", &ar_current, ar_items, IM_ARRAYSIZE(ar_items))) {
-          if (ar_current == 0) g_config.extended_aspect_ratio = 0;
-          else if (ar_current == 1) g_config.extended_aspect_ratio = 43;
-          else if (ar_current == 2) g_config.extended_aspect_ratio = 32;
-          else if (ar_current == 3) g_config.extended_aspect_ratio = 64;
-
-          if (g_config.extended_aspect_ratio != 0) {
-            g_config.features0 |= kFeatures0_ExtendScreen64 | kFeatures0_WidescreenVisualFixes;
-          } else {
-            g_config.features0 &= ~(kFeatures0_ExtendScreen64 | kFeatures0_WidescreenVisualFixes);
-          }
+          SetAspectRatio(ar_current);
         }
 
         ImGui::Spacing();
@@ -323,10 +311,17 @@ static void RenderOverlayWindow() {
           else g_config.features0 &= ~kFeatures0_DimFlashes;
         }
 
-        bool fps_title = g_config.display_perf_title;
-        if (ImGui::Checkbox("Mostrar FPS na barra de título da janela", &fps_title)) {
-          g_config.display_perf_title = fps_title;
+        bool fps_hud = g_config.display_fps;
+        if (ImGui::Checkbox("Exibir Contador de FPS na Tela (HUD / OSD)", &fps_hud)) {
+          g_config.display_fps = fps_hud;
         }
+
+        ImGui::SameLine();
+        bool limit_60 = !g_config.disable_frame_delay;
+        if (ImGui::Checkbox("Limitar em 60 FPS", &limit_60)) {
+          g_config.disable_frame_delay = !limit_60;
+        }
+        ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "A velocidade original do SNES é de 60 FPS.");
 
         ImGui::EndTabItem();
       }
@@ -533,9 +528,9 @@ static void RenderOverlayWindow() {
     ImGui::Separator();
 
     // Rodapé com botões de ação e status
-    if (ImGui::Button("Salvar no zelda3.ini", ImVec2(180, 30))) {
+    if (ImGui::Button("Salvar", ImVec2(120, 30))) {
       if (SaveConfigFile(NULL)) {
-        SetStatus("Configurações salvas com sucesso!");
+        SetStatus("Configurações salvas em zelda3.ini");
       } else {
         char err_buf[320];
         snprintf(err_buf, sizeof(err_buf), "Erro ao salvar: %s", g_last_save_error[0] ? g_last_save_error : "Acesso negado");
@@ -560,8 +555,42 @@ static void RenderOverlayWindow() {
   ImGui::End();
 }
 
+static void RenderFpsOverlay(int fps) {
+  const float PAD_X = 12.0f;
+  const float PAD_Y = 10.0f;
+  const ImGuiViewport* viewport = ImGui::GetMainViewport();
+  ImVec2 work_pos = viewport->WorkPos;
+  ImVec2 work_size = viewport->WorkSize;
+  ImVec2 window_pos = ImVec2(work_pos.x + work_size.x - PAD_X, work_pos.y + PAD_Y);
+  ImVec2 window_pos_pivot = ImVec2(1.0f, 0.0f);
+  ImGui::SetNextWindowPos(window_pos, ImGuiCond_Always, window_pos_pivot);
+  ImGui::SetNextWindowBgAlpha(0.65f);
+
+  ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+                          ImGuiWindowFlags_AlwaysAutoResize |
+                          ImGuiWindowFlags_NoSavedSettings |
+                          ImGuiWindowFlags_NoFocusOnAppearing |
+                          ImGuiWindowFlags_NoNav |
+                          ImGuiWindowFlags_NoMove |
+                          ImGuiWindowFlags_NoInputs;
+
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 5.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 4.0f));
+
+  if (ImGui::Begin("##FPS_Overlay", NULL, flags)) {
+    ImVec4 col = (fps >= 55) ? ImVec4(0.35f, 0.95f, 0.40f, 1.0f) :
+                 (fps >= 30) ? ImVec4(0.95f, 0.85f, 0.20f, 1.0f) :
+                               ImVec4(0.95f, 0.30f, 0.30f, 1.0f);
+    ImGui::TextColored(col, "%d FPS", fps);
+  }
+  ImGui::End();
+
+  ImGui::PopStyleVar(3);
+}
+
 void Overlay_Render(SDL_Renderer *renderer, bool is_opengl) {
-  if (!s_overlay_open)
+  if (!s_overlay_open && !g_config.display_fps)
     return;
 
   if (is_opengl) {
@@ -572,7 +601,14 @@ void Overlay_Render(SDL_Renderer *renderer, bool is_opengl) {
   ImGui_ImplSDL2_NewFrame();
   ImGui::NewFrame();
 
-  RenderOverlayWindow();
+  if (g_config.display_fps) {
+    RenderFpsOverlay(GetActualFps());
+  }
+
+  bool was_open = s_overlay_open;
+  if (s_overlay_open) {
+    RenderOverlayWindow();
+  }
 
   ImGui::Render();
 
@@ -582,7 +618,7 @@ void Overlay_Render(SDL_Renderer *renderer, bool is_opengl) {
     ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
   }
 
-  if (!s_overlay_open) {
+  if (was_open && !s_overlay_open) {
     SDL_ShowCursor(SDL_DISABLE);
     SaveConfigFile(NULL);
   }

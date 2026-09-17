@@ -10,6 +10,7 @@
 #include <SDL.h>
 #include "features.h"
 #include "util.h"
+#include "overlay.h"
 
 enum {
   kKeyMod_ScanCode = 0x200,
@@ -448,6 +449,8 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       return true;
     } else if (StringEqualsNoCase(key, "DisplayPerfInTitle")) {
       return ParseBool(value, &g_config.display_perf_title);
+    } else if (StringEqualsNoCase(key, "DisplayFPS")) {
+      return ParseBool(value, &g_config.display_fps);
     } else if (StringEqualsNoCase(key, "DisableFrameDelay")) {
       return ParseBool(value, &g_config.disable_frame_delay);
     } else if (StringEqualsNoCase(key, "Language")) {
@@ -590,15 +593,14 @@ bool SaveConfigFile(const char *filename) {
 
   fprintf(f, "[General]\n");
   fprintf(f, "Autosave = %d\n", g_config.autosave ? 1 : 0);
+  fprintf(f, "DisplayFPS = %d\n", g_config.display_fps ? 1 : 0);
   fprintf(f, "DisplayPerfInTitle = %d\n", g_config.display_perf_title ? 1 : 0);
-  if (g_config.extended_aspect_ratio == 43)
-    fprintf(f, "ExtendedAspectRatio = 16:9\n");
-  else if (g_config.extended_aspect_ratio == 32)
-    fprintf(f, "ExtendedAspectRatio = 16:10\n");
-  else if (g_config.extended_aspect_ratio == 64)
-    fprintf(f, "ExtendedAspectRatio = 18:9\n");
+  int ar_idx = GetAspectRatioIndex();
+  const char *ar_str = (ar_idx == 1) ? "16:9" : (ar_idx == 2) ? "16:10" : (ar_idx == 3) ? "18:9" : "4:3";
+  if (g_config.extend_y)
+    fprintf(f, "ExtendedAspectRatio = extend_y, %s\n", ar_str);
   else
-    fprintf(f, "ExtendedAspectRatio = 4:3\n");
+    fprintf(f, "ExtendedAspectRatio = %s\n", ar_str);
   fprintf(f, "DisableFrameDelay = %d\n", g_config.disable_frame_delay ? 1 : 0);
   if (g_config.language && *g_config.language)
     fprintf(f, "Language = %s\n", g_config.language);

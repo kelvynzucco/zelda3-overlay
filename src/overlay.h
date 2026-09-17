@@ -33,6 +33,11 @@ void Overlay_Render(SDL_Renderer *renderer, bool is_opengl);
 void SetWindowScale(int scale);
 void SetWindowResolution(int width, int height);
 void SetFullscreenMode(int mode);
+void SetAspectRatio(int mode);
+int GetAspectRatioIndex(void);
+
+// FPS helpers
+int GetActualFps(void);
 
 // Audio controls
 int GetMasterVolume(void);

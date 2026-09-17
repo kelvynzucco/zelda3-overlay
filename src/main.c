@@ -28,6 +28,7 @@
 #include "util.h"
 #include "audio.h"
 #include "overlay.h"
+#include "features.h"
 
 static bool g_run_without_emu = 0;
 
@@ -212,6 +213,58 @@ void SetFullscreenMode(int mode) {
   }
 }
 
+void SetAspectRatio(int mode) {
+  int h = g_config.extend_y ? 240 : 224;
+  if (mode == 1) { // 16:9
+    g_config.extended_aspect_ratio = (h * 16 / 9 - 256) / 2;
+  } else if (mode == 2) { // 16:10
+    g_config.extended_aspect_ratio = (h * 16 / 10 - 256) / 2;
+  } else if (mode == 3) { // 18:9
+    g_config.extended_aspect_ratio = (h * 18 / 9 - 256) / 2;
+  } else { // 4:3
+    g_config.extended_aspect_ratio = 0;
+  }
+
+  if (g_config.extended_aspect_ratio != 0) {
+    g_config.features0 |= (kFeatures0_ExtendScreen64 | kFeatures0_WidescreenVisualFixes);
+  } else {
+    g_config.features0 &= ~(kFeatures0_ExtendScreen64 | kFeatures0_WidescreenVisualFixes);
+  }
+
+  g_wanted_zelda_features = g_config.features0;
+  enhanced_features0 = g_config.features0;
+
+  if (g_zenv.ppu) {
+    g_zenv.ppu->extraLeftRight = UintMin(g_config.extended_aspect_ratio, kPpuExtraLeftRight);
+    g_zenv.ppu->extraLeftCur = UintMin(g_zenv.ppu->extraLeftCur, g_zenv.ppu->extraLeftRight);
+    g_zenv.ppu->extraRightCur = UintMin(g_zenv.ppu->extraRightCur, g_zenv.ppu->extraLeftRight);
+  }
+  g_snes_width = (g_config.extended_aspect_ratio * 2 + 256);
+}
+
+int GetAspectRatioIndex(void) {
+  if (g_config.extended_aspect_ratio == 0)
+    return 0; // 4:3
+  int h = g_config.extend_y ? 240 : 224;
+  int ar_16_9 = (h * 16 / 9 - 256) / 2;
+  int ar_16_10 = (h * 16 / 10 - 256) / 2;
+  int ar_18_9 = (h * 18 / 9 - 256) / 2;
+
+  if (abs((int)g_config.extended_aspect_ratio - ar_16_9) <= 2)
+    return 1;
+  if (abs((int)g_config.extended_aspect_ratio - ar_16_10) <= 2)
+    return 2;
+  if (abs((int)g_config.extended_aspect_ratio - ar_18_9) <= 2)
+    return 3;
+  return 1;
+}
+
+static int g_actual_fps = 60;
+
+int GetActualFps(void) {
+  return g_actual_fps;
+}
+
 
 int GetMasterVolume(void) {
   return (g_sdl_audio_mixer_volume * 100) / SDL_MIX_MAXVOLUME;
@@ -361,6 +414,20 @@ static void SdlRenderer_Destroy() {
 }
 
 static void SdlRenderer_BeginDraw(int width, int height, uint8 **pixels, int *pitch) {
+  int tex_w = 0, tex_h = 0;
+  if (g_texture)
+    SDL_QueryTexture(g_texture, NULL, NULL, &tex_w, &tex_h);
+  if (!g_texture || tex_w != width || tex_h != height) {
+    if (g_texture)
+      SDL_DestroyTexture(g_texture);
+    g_texture = SDL_CreateTexture(g_renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
+    if (!g_texture) {
+      printf("Failed to recreate texture (%dx%d): %s\n", width, height, SDL_GetError());
+      return;
+    }
+  }
+  g_sdl_renderer_rect.x = 0;
+  g_sdl_renderer_rect.y = 0;
   g_sdl_renderer_rect.w = width;
   g_sdl_renderer_rect.h = height;
   if (SDL_LockTexture(g_texture, &g_sdl_renderer_rect, (void **)pixels, pitch) != 0) {
@@ -626,14 +693,29 @@ int main(int argc, char** argv) {
 
     DrawPpuFrameWithPerf();
 
-    if (g_config.display_perf_title) {
-      char title[60];
-      snprintf(title, sizeof(title), "%s | FPS: %d", kWindowTitle, g_curr_fps);
-      SDL_SetWindowTitle(g_window, title);
-    }
-
     // if vsync isn't working, delay manually
     curTick = SDL_GetTicks();
+
+    static uint32 last_fps_time = 0;
+    static int s_fps_frames = 0;
+    s_fps_frames++;
+    if (curTick - last_fps_time >= 250) {
+      if (curTick > last_fps_time)
+        g_actual_fps = (int)((s_fps_frames * 1000.0f) / (curTick - last_fps_time) + 0.5f);
+      s_fps_frames = 0;
+      last_fps_time = curTick;
+    }
+
+    static bool s_title_has_fps = false;
+    if (g_config.display_perf_title && !(g_win_flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP))) {
+      char title[80];
+      snprintf(title, sizeof(title), "%s | %d FPS", kWindowTitle, g_actual_fps);
+      SDL_SetWindowTitle(g_window, title);
+      s_title_has_fps = true;
+    } else if (s_title_has_fps) {
+      SDL_SetWindowTitle(g_window, kWindowTitle);
+      s_title_has_fps = false;
+    }
 
     if (!g_config.disable_frame_delay) {
       static const uint8 delays[3] = { 17, 17, 16 }; // 60 fps
@@ -798,7 +880,7 @@ static void HandleCommand_Locked(uint32 j, bool pressed) {
     case kKeys_ReplayTurbo: g_replay_turbo = !g_replay_turbo; break;
     case kKeys_WindowBigger: ChangeWindowScale(1); break;
     case kKeys_WindowSmaller: ChangeWindowScale(-1); break;
-    case kKeys_DisplayPerf: g_display_perf ^= 1; break;
+    case kKeys_DisplayPerf: g_config.display_fps ^= 1; break;
     case kKeys_ToggleRenderer: g_ppu_render_flags ^= kPpuRenderFlags_NewRenderer; break;
     case kKeys_VolumeUp:
     case kKeys_VolumeDown: HandleVolumeAdjustment(j == kKeys_VolumeUp ? 1 : -1); break;
