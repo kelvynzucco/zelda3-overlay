@@ -147,6 +147,7 @@ int GetMasterVolume(void) {
 void SetMasterVolume(int percent) {
   if (percent < 0) percent = 0;
   if (percent > 100) percent = 100;
+  g_config.master_volume = (uint8)percent;
   g_sdl_audio_mixer_volume = (percent * SDL_MIX_MAXVOLUME) / 100;
 }
 
@@ -212,6 +213,14 @@ static uint8 g_audio_channels;
 
 static void SDLCALL AudioCallback(void *userdata, Uint8 *stream, int len) {
   if (SDL_LockMutex(g_audio_mutex)) Die("Mutex lock failed!");
+
+  if (!g_config.enable_audio || g_sdl_audio_mixer_volume <= 0) {
+    SDL_memset(stream, 0, len);
+    ZeldaDiscardUnusedAudioFrames();
+    SDL_UnlockMutex(g_audio_mutex);
+    return;
+  }
+
   while (len != 0) {
     if (g_audiobuffer_end - g_audiobuffer_cur == 0) {
       ZeldaRenderAudio((int16*)g_audiobuffer, g_frames_per_block, g_audio_channels);
@@ -376,6 +385,10 @@ int main(int argc, char** argv) {
   if (g_config.audio_samples <= 0 || ((g_config.audio_samples & (g_config.audio_samples - 1)) != 0))
     g_config.audio_samples = kDefaultSamples;
 
+  if (g_config.master_volume > 100)
+    g_config.master_volume = 100;
+  g_sdl_audio_mixer_volume = (g_config.master_volume * SDL_MIX_MAXVOLUME) / 100;
+
   // set up SDL
   if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
     printf("Failed to init SDL: %s\n", SDL_GetError());
@@ -412,21 +425,19 @@ int main(int argc, char** argv) {
   g_audio_mutex = SDL_CreateMutex();
   if (!g_audio_mutex) Die("No mutex");
 
-  if (g_config.enable_audio) {
-    want.freq = g_config.audio_freq;
-    want.format = AUDIO_S16;
-    want.channels = g_config.audio_channels;
-    want.samples = g_config.audio_samples;
-    want.callback = &AudioCallback;
-    device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
-    if (device == 0) {
-      printf("Failed to open audio device: %s\n", SDL_GetError());
-      return 1;
-    }
-    g_audio_channels = have.channels;
-    g_frames_per_block = (534 * have.freq) / 32000;
-    g_audiobuffer = malloc(g_frames_per_block * have.channels * sizeof(int16));
+  want.freq = g_config.audio_freq;
+  want.format = AUDIO_S16;
+  want.channels = g_config.audio_channels;
+  want.samples = g_config.audio_samples;
+  want.callback = &AudioCallback;
+  device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+  if (device == 0) {
+    printf("Failed to open audio device: %s\n", SDL_GetError());
+    return 1;
   }
+  g_audio_channels = have.channels;
+  g_frames_per_block = (534 * have.freq) / 32000;
+  g_audiobuffer = malloc(g_frames_per_block * have.channels * sizeof(int16));
 
   if (argc >= 1 && !g_run_without_emu)
     LoadRom(argv[0]);

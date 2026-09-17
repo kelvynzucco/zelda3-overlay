@@ -67,6 +67,7 @@ typedef struct Config {
   bool resume_msu;
   bool disable_frame_delay;
   uint8 msuvolume;
+  uint8 master_volume;
   uint32 features0;
 
   const char *link_graphics;

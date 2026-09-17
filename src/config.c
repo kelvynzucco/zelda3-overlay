@@ -378,6 +378,9 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
   } else if (section == 2) {
     if (StringEqualsNoCase(key, "EnableAudio")) {
       return ParseBool(value, &g_config.enable_audio);
+    } else if (StringEqualsNoCase(key, "AudioVolume") || StringEqualsNoCase(key, "MasterVolume")) {
+      g_config.master_volume = (uint8)atoi(value);
+      return true;
     } else if (StringEqualsNoCase(key, "AudioFreq")) {
       g_config.audio_freq = (uint16)strtol(value, (char**)NULL, 10);
       return true;
@@ -518,6 +521,7 @@ static bool ParseOneConfigFile(const char *filename, int depth) {
 
 void ParseConfigFile(const char *filename) {
   g_config.msuvolume = 100;  // default msu volume, 100%
+  g_config.master_volume = 100; // default master volume, 100%
 
   if (filename != NULL || !ParseOneConfigFile("zelda3.user.ini", 0)) {
     if (filename == NULL)
@@ -574,6 +578,7 @@ void SaveConfigFile(const char *filename) {
 
   fprintf(f, "\n[Sound]\n");
   fprintf(f, "EnableAudio = %d\n", g_config.enable_audio ? 1 : 0);
+  fprintf(f, "AudioVolume = %d\n", g_config.master_volume);
   fprintf(f, "AudioFreq = %d\n", g_config.audio_freq);
   fprintf(f, "AudioChannels = %d\n", g_config.audio_channels);
   fprintf(f, "AudioSamples = %d\n", g_config.audio_samples);
