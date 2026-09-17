@@ -33,6 +33,10 @@ void Overlay_Render(SDL_Renderer *renderer, bool is_opengl);
 void SetWindowScale(int scale);
 void SetFullscreenMode(int mode);
 
+// Audio controls
+int GetMasterVolume(void);
+void SetMasterVolume(int percent);
+
 #ifdef __cplusplus
 }
 #endif

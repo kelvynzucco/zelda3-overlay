@@ -273,9 +273,16 @@ static void RenderOverlayWindow() {
           g_config.enable_audio = audio_en;
         }
 
+        int master_vol = GetMasterVolume();
+        if (ImGui::SliderInt("Volume Geral (Master)", &master_vol, 0, 100, "%d%%")) {
+          SetMasterVolume(master_vol);
+        }
+        ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "Controla o volume global (músicas originais do SNES e efeitos sonoros).");
+
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "MSU-1 (Trilhas Orquestradas de Alta Qualidade)");
+        ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "MSU-1 (Trilhas Orquestradas / CD Audio)");
         ImGui::Separator();
+        ImGui::TextWrapped("O MSU-1 permite substituir a trilha sonora sintetizada do SNES por faixas orquestradas reais em áudio de alta definição.");
 
         const char *msu_modes[] = { "Desativado", "MSU-1 Padrão", "MSU-1 Deluxe", "Opuz", "Deluxe + Opuz" };
         int msu_curr = 0;
@@ -294,9 +301,10 @@ static void RenderOverlayWindow() {
         }
 
         int msu_vol = g_config.msuvolume;
-        if (ImGui::SliderInt("Volume MSU-1", &msu_vol, 0, 100, "%d%%")) {
+        if (ImGui::SliderInt("Volume das Músicas MSU-1", &msu_vol, 0, 100, "%d%%")) {
           g_config.msuvolume = (uint8)msu_vol;
         }
+        ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "Ajusta o ganho das músicas orquestradas MSU-1 relativo aos efeitos sonoros.");
 
         bool resume_msu = g_config.resume_msu;
         if (ImGui::Checkbox("Continuar faixa de onde parou ao retornar para uma área", &resume_msu)) {

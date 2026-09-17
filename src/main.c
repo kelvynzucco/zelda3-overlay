@@ -140,6 +140,16 @@ void SetFullscreenMode(int mode) {
   }
 }
 
+int GetMasterVolume(void) {
+  return (g_sdl_audio_mixer_volume * 100) / SDL_MIX_MAXVOLUME;
+}
+
+void SetMasterVolume(int percent) {
+  if (percent < 0) percent = 0;
+  if (percent > 100) percent = 100;
+  g_sdl_audio_mixer_volume = (percent * SDL_MIX_MAXVOLUME) / 100;
+}
+
 #define RESIZE_BORDER 20
 static SDL_HitTestResult HitTestCallback(SDL_Window *win, const SDL_Point *pt, void *data) {
   uint32 flags = SDL_GetWindowFlags(win);
