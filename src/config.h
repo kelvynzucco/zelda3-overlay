@@ -106,5 +106,6 @@ enum {
 extern Config g_config;
 
 void ParseConfigFile(const char *filename);
+void SaveConfigFile(const char *filename);
 int FindCmdForSdlKey(SDL_Keycode code, SDL_Keymod mod);
 int FindCmdForGamepadButton(int button, uint32 modifiers);

@@ -26,6 +26,7 @@
 #include "load_gfx.h"
 #include "util.h"
 #include "audio.h"
+#include "overlay.h"
 
 static bool g_run_without_emu = 0;
 
@@ -264,6 +265,7 @@ static void SdlRenderer_EndDraw() {
 //  printf("%f ms\n", v * 1000);
   SDL_RenderClear(g_renderer);
   SDL_RenderCopy(g_renderer, g_texture, &g_sdl_renderer_rect, NULL);
+  Overlay_Render(g_renderer, false);
   SDL_RenderPresent(g_renderer); // vsyncs to 60 FPS?
 }
 
@@ -355,6 +357,8 @@ int main(int argc, char** argv) {
   if (!g_renderer_funcs.Initialize(window))
     return 1;
 
+  Overlay_Init(window, g_renderer, (g_config.output_method == kOutputMethod_OpenGL || g_config.output_method == kOutputMethod_OpenGL_ES));
+
   SDL_AudioDeviceID device = 0;
   SDL_AudioSpec want = { 0 }, have;
   g_audio_mutex = SDL_CreateMutex();
@@ -402,6 +406,16 @@ int main(int argc, char** argv) {
 
   while(running) {
     while(SDL_PollEvent(&event)) {
+      if (event.type == SDL_KEYDOWN && (event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_F12)) {
+        Overlay_Toggle();
+        continue;
+      }
+      if (Overlay_IsOpen()) {
+        Overlay_ProcessEvent(&event);
+        if (event.type == SDL_QUIT)
+          running = false;
+        continue;
+      }
       switch(event.type) {
       case SDL_CONTROLLERDEVICEADDED:
         OpenOneGamepad(event.cdevice.which);
@@ -507,6 +521,7 @@ int main(int argc, char** argv) {
   SDL_DestroyMutex(g_audio_mutex);
   free(g_audiobuffer);
 
+  Overlay_Shutdown();
   g_renderer_funcs.Destroy();
 
   SDL_DestroyWindow(window);

@@ -527,3 +527,85 @@ void ParseConfigFile(const char *filename) {
   }
   RegisterDefaultKeys();
 }
+
+void SaveConfigFile(const char *filename) {
+  if (!filename) filename = "zelda3.ini";
+  FILE *f = fopen(filename, "w");
+  if (!f) return;
+
+  fprintf(f, "[General]\n");
+  fprintf(f, "Autosave = %d\n", g_config.autosave ? 1 : 0);
+  fprintf(f, "DisplayPerfInTitle = %d\n", g_config.display_perf_title ? 1 : 0);
+  if (g_config.extended_aspect_ratio == 43)
+    fprintf(f, "ExtendedAspectRatio = 16:9\n");
+  else if (g_config.extended_aspect_ratio == 32)
+    fprintf(f, "ExtendedAspectRatio = 16:10\n");
+  else if (g_config.extended_aspect_ratio == 64)
+    fprintf(f, "ExtendedAspectRatio = 18:9\n");
+  else
+    fprintf(f, "ExtendedAspectRatio = 4:3\n");
+  fprintf(f, "DisableFrameDelay = %d\n", g_config.disable_frame_delay ? 1 : 0);
+  if (g_config.language && *g_config.language)
+    fprintf(f, "Language = %s\n", g_config.language);
+
+  fprintf(f, "\n[Graphics]\n");
+  if (g_config.window_width && g_config.window_height)
+    fprintf(f, "WindowSize = %dx%d\n", g_config.window_width, g_config.window_height);
+  else
+    fprintf(f, "WindowSize = Auto\n");
+  fprintf(f, "Fullscreen = %d\n", g_config.fullscreen);
+  fprintf(f, "WindowScale = %d\n", g_config.window_scale);
+  fprintf(f, "NewRenderer = %d\n", g_config.new_renderer ? 1 : 0);
+  fprintf(f, "EnhancedMode7 = %d\n", g_config.enhanced_mode7 ? 1 : 0);
+  fprintf(f, "IgnoreAspectRatio = %d\n", g_config.ignore_aspect_ratio ? 1 : 0);
+  fprintf(f, "NoSpriteLimits = %d\n", g_config.no_sprite_limits ? 1 : 0);
+  if (g_config.output_method == kOutputMethod_OpenGL)
+    fprintf(f, "OutputMethod = OpenGL\n");
+  else if (g_config.output_method == kOutputMethod_OpenGL_ES)
+    fprintf(f, "OutputMethod = OpenGL ES\n");
+  else if (g_config.output_method == kOutputMethod_SDLSoftware)
+    fprintf(f, "OutputMethod = SDL-Software\n");
+  else
+    fprintf(f, "OutputMethod = SDL\n");
+  fprintf(f, "LinearFiltering = %d\n", g_config.linear_filtering ? 1 : 0);
+  if (g_config.shader && *g_config.shader)
+    fprintf(f, "Shader = %s\n", g_config.shader);
+  fprintf(f, "DimFlashes = %d\n", (g_config.features0 & kFeatures0_DimFlashes) ? 1 : 0);
+
+  fprintf(f, "\n[Sound]\n");
+  fprintf(f, "EnableAudio = %d\n", g_config.enable_audio ? 1 : 0);
+  fprintf(f, "AudioFreq = %d\n", g_config.audio_freq);
+  fprintf(f, "AudioChannels = %d\n", g_config.audio_channels);
+  fprintf(f, "AudioSamples = %d\n", g_config.audio_samples);
+  if (g_config.enable_msu == kMsuEnabled_Opuz)
+    fprintf(f, "EnableMSU = opuz\n");
+  else if (g_config.enable_msu == kMsuEnabled_MsuDeluxe)
+    fprintf(f, "EnableMSU = deluxe\n");
+  else if (g_config.enable_msu == (kMsuEnabled_MsuDeluxe | kMsuEnabled_Opuz))
+    fprintf(f, "EnableMSU = deluxe-opuz\n");
+  else
+    fprintf(f, "EnableMSU = %d\n", g_config.enable_msu ? 1 : 0);
+  if (g_config.msu_path && *g_config.msu_path)
+    fprintf(f, "MSUPath = %s\n", g_config.msu_path);
+  fprintf(f, "MSUVolume = %d\n", g_config.msuvolume);
+  fprintf(f, "ResumeMSU = %d\n", g_config.resume_msu ? 1 : 0);
+
+  fprintf(f, "\n[Features]\n");
+  fprintf(f, "ItemSwitchLR = %d\n", (g_config.features0 & kFeatures0_SwitchLR) ? 1 : 0);
+  fprintf(f, "ItemSwitchLRLimit = %d\n", (g_config.features0 & kFeatures0_SwitchLRLimit) ? 1 : 0);
+  fprintf(f, "TurnWhileDashing = %d\n", (g_config.features0 & kFeatures0_TurnWhileDashing) ? 1 : 0);
+  fprintf(f, "MirrorToDarkworld = %d\n", (g_config.features0 & kFeatures0_MirrorToDarkworld) ? 1 : 0);
+  fprintf(f, "CollectItemsWithSword = %d\n", (g_config.features0 & kFeatures0_CollectItemsWithSword) ? 1 : 0);
+  fprintf(f, "BreakPotsWithSword = %d\n", (g_config.features0 & kFeatures0_BreakPotsWithSword) ? 1 : 0);
+  fprintf(f, "DisableLowHealthBeep = %d\n", (g_config.features0 & kFeatures0_DisableLowHealthBeep) ? 1 : 0);
+  fprintf(f, "SkipIntroOnKeypress = %d\n", (g_config.features0 & kFeatures0_SkipIntroOnKeypress) ? 1 : 0);
+  fprintf(f, "ShowMaxItemsInYellow = %d\n", (g_config.features0 & kFeatures0_ShowMaxItemsInYellow) ? 1 : 0);
+  fprintf(f, "MoreActiveBombs = %d\n", (g_config.features0 & kFeatures0_MoreActiveBombs) ? 1 : 0);
+  fprintf(f, "CarryMoreRupees = %d\n", (g_config.features0 & kFeatures0_CarryMoreRupees) ? 1 : 0);
+  fprintf(f, "MiscBugFixes = %d\n", (g_config.features0 & kFeatures0_MiscBugFixes) ? 1 : 0);
+  fprintf(f, "GameChangingBugFixes = %d\n", (g_config.features0 & kFeatures0_GameChangingBugFixes) ? 1 : 0);
+  fprintf(f, "CancelBirdTravel = %d\n", (g_config.features0 & kFeatures0_CancelBirdTravel) ? 1 : 0);
+
+  fclose(f);
+}
+

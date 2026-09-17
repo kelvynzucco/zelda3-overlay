@@ -6,6 +6,7 @@
 #include "util.h"
 #include "glsl_shader.h"
 #include "config.h"
+#include "overlay.h"
 
 #define CODE(...) #__VA_ARGS__
 
@@ -239,6 +240,8 @@ static void OpenGLRenderer_EndDraw() {
   } else {
     GlslShader_Render(g_glsl_shader, &g_texture, viewport_x, viewport_y, viewport_width, viewport_height);
   }
+
+  Overlay_Render(NULL, true);
 
   SDL_GL_SwapWindow(g_window);
 }

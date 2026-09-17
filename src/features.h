@@ -59,7 +59,12 @@ enum {
 
 
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 extern uint32 g_wanted_zelda_features;
-
+#ifdef __cplusplus
+}
+#endif
 
 #endif  // ZELDA3_FEATURES_H_
