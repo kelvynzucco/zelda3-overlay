@@ -764,6 +764,15 @@ int main(int argc, char** argv) {
         }
       }
 
+      if (event.type == SDL_CONTROLLERDEVICEADDED || event.type == SDL_CONTROLLERDEVICEREMOVED) {
+        Overlay_ProcessEvent(&event);
+        if (event.type == SDL_CONTROLLERDEVICEADDED)
+          OpenOneGamepad(event.cdevice.which);
+        else
+          CloseOneGamepad(event.cdevice.which);
+        continue;
+      }
+
       if (event.type == SDL_KEYDOWN && (event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_F12)) {
         Overlay_Toggle();
         continue;
@@ -775,12 +784,6 @@ int main(int argc, char** argv) {
         continue;
       }
       switch(event.type) {
-      case SDL_CONTROLLERDEVICEADDED:
-        OpenOneGamepad(event.cdevice.which);
-        break;
-      case SDL_CONTROLLERDEVICEREMOVED:
-        CloseOneGamepad(event.cdevice.which);
-        break;
       case SDL_CONTROLLERAXISMOTION:
         HandleGamepadAxisInput(event.caxis.which, event.caxis.axis, event.caxis.value);
         break;

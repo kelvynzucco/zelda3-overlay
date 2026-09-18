@@ -15,18 +15,17 @@ extern "C" {
 
   extern uint8 g_ram[131072];
   void ZeldaEnableMsu(uint8 enable);
+  void SetFullscreenMode(int mode);
+  void SetWindowScale(int scale);
+  void SetWindowResolution(int width, int height);
+  void SetAspectRatio(int index);
+  int GetAspectRatioIndex(void);
+  int GetMasterVolume(void);
+  void SetMasterVolume(int volume);
+  int GetActualFps(void);
 }
 
-static bool s_overlay_open = false;
-static bool s_is_opengl = false;
-static int s_selected_save_slot = 0;
-static char s_status_message[128] = "";
-static uint32_t s_status_message_time = 0;
-static bool s_request_exit_game = false;
-
-// =============================================================================
-// MÁQUINA DE ESTADOS DO MENU HIERÁRQUICO
-// =============================================================================
+// Estados e telas da arquitetura do Menu do Jogo
 enum MenuScreen {
   kScreen_MainMenu = 0,
   kScreen_Video,
@@ -39,7 +38,12 @@ enum MenuScreen {
 };
 
 static MenuScreen s_current_screen = kScreen_MainMenu;
-static bool s_needs_focus_first = true;
+static bool s_overlay_open = false;
+static bool s_is_opengl = false;
+static bool s_request_exit_game = false;
+static int  s_selected_save_slot = 0;
+static char s_status_message[128] = { 0 };
+static uint32_t s_status_message_time = 0;
 
 struct ResolutionPreset {
   const char *name;
@@ -72,13 +76,13 @@ static const ResolutionPreset kStandardResolutions[] = {
 };
 
 static const char *kLangNames[] = {
-  "Português do Brasil (PT-BR)",
+  "Portugues do Brasil (PT-BR)",
   "English (US)",
-  "Deutsch (Alemão)",
-  "Français (Francês)",
-  "Español (Espanhol)",
-  "Polski (Polonês)",
-  "Nederlands (Holandês)",
+  "Deutsch (Alemao)",
+  "Francais (Frances)",
+  "Espanol (Espanhol)",
+  "Polski (Polones)",
+  "Nederlands (Holandes)",
   "Svenska (Sueco)"
 };
 static const char *kLangCodes[] = { "pt", "us", "de", "fr", "es", "pl", "nl", "sv" };
@@ -113,7 +117,7 @@ static void SyncStagedSettingsFromActive() {
       break;
     }
   }
-  if (s_staged.res_idx < 0) s_staged.res_idx = 7; // Padrão 1280x720
+  if (s_staged.res_idx < 0) s_staged.res_idx = 7; // Padrao 1280x720
 
   s_staged.fs_mode = g_config.fullscreen;
   if (s_staged.fs_mode < 0 || s_staged.fs_mode > 2) s_staged.fs_mode = 0;
@@ -219,6 +223,8 @@ bool Overlay_Init(SDL_Window *window, SDL_Renderer *renderer, bool is_opengl) {
     ImGui_ImplOpenGL3_Init("#version 130");
   }
 
+  ImGui_ImplSDL2_SetGamepadMode(ImGui_ImplSDL2_GamepadMode_AutoAll);
+
   return true;
 }
 
@@ -249,12 +255,16 @@ bool Overlay_IsOpen(void) {
   return s_overlay_open;
 }
 
+static int s_menu_cursor = 0;
+static bool s_cursor_just_moved = false;
+
 void Overlay_Toggle(void) {
   s_overlay_open = !s_overlay_open;
   SDL_ShowCursor(s_overlay_open ? SDL_ENABLE : SDL_DISABLE);
   if (s_overlay_open) {
     s_current_screen = kScreen_MainMenu;
-    s_needs_focus_first = true;
+    s_menu_cursor = 0;
+    s_cursor_just_moved = true;
     SyncStagedSettingsFromActive();
   } else {
     SaveConfigFile(NULL);
@@ -268,7 +278,8 @@ void Overlay_SetOpen(bool open) {
   s_overlay_open = open;
   if (s_overlay_open) {
     s_current_screen = kScreen_MainMenu;
-    s_needs_focus_first = true;
+    s_menu_cursor = 0;
+    s_cursor_just_moved = true;
     SyncStagedSettingsFromActive();
   }
   SDL_ShowCursor(s_overlay_open ? SDL_ENABLE : SDL_DISABLE);
@@ -279,11 +290,100 @@ bool Overlay_ShouldExit(void) {
 }
 
 // =============================================================================
-// COMPONENTES DE INTERFACE DE JOGO NATIVA (CONSOLE MENU ROWS & WIDGETS)
+// NAVEGAÇÃO UNIFICADA E ESTRUTURA DE CONTROLES
 // =============================================================================
 
+struct MenuNavInputs {
+  bool up;
+  bool down;
+  bool left;
+  bool right;
+  bool confirm; // A / Enter / Space
+  bool cancel;  // B / ESC
+  bool fast_up; // L1 / PageUp
+  bool fast_down; // R1 / PageDown
+};
+
+static MenuNavInputs s_nav = {0};
+
+static MenuNavInputs ReadNavInputs() {
+  MenuNavInputs in = {0};
+
+  // Up: D-Pad Up, Analog Stick Up, Keyboard Up Arrow
+  in.up = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadUp, true) ||
+          ImGui::IsKeyPressed(ImGuiKey_GamepadLStickUp, true) ||
+          ImGui::IsKeyPressed(ImGuiKey_UpArrow, true);
+
+  // Down: D-Pad Down, Analog Stick Down, Keyboard Down Arrow
+  in.down = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadDown, true) ||
+            ImGui::IsKeyPressed(ImGuiKey_GamepadLStickDown, true) ||
+            ImGui::IsKeyPressed(ImGuiKey_DownArrow, true);
+
+  // Left: D-Pad Left, Analog Stick Left, Keyboard Left Arrow
+  in.left = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft, true) ||
+            ImGui::IsKeyPressed(ImGuiKey_GamepadLStickLeft, true) ||
+            ImGui::IsKeyPressed(ImGuiKey_LeftArrow, true);
+
+  // Right: D-Pad Right, Analog Stick Right, Keyboard Right Arrow
+  in.right = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight, true) ||
+             ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight, true) ||
+             ImGui::IsKeyPressed(ImGuiKey_RightArrow, true);
+
+  // Confirm: Gamepad A / Cross, Enter, Keypad Enter, Space
+  in.confirm = ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false) ||
+               ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+               ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false) ||
+               ImGui::IsKeyPressed(ImGuiKey_Space, false);
+
+  // Cancel / Back: Gamepad B / Circle, Escape
+  in.cancel = ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+              ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+
+  // Shoulders (L1/R1, PageUp/PageDown) para pular 4 itens
+  in.fast_up = ImGui::IsKeyPressed(ImGuiKey_GamepadL1, true) || ImGui::IsKeyPressed(ImGuiKey_PageUp, true);
+  in.fast_down = ImGui::IsKeyPressed(ImGuiKey_GamepadR1, true) || ImGui::IsKeyPressed(ImGuiKey_PageDown, true);
+
+  return in;
+}
+
+static void UpdateMenuNavigation(int total_items) {
+  if (total_items <= 0) return;
+
+  if (s_nav.fast_up) {
+    s_menu_cursor = (s_menu_cursor - 4 + total_items) % total_items;
+    s_cursor_just_moved = true;
+  } else if (s_nav.fast_down) {
+    s_menu_cursor = (s_menu_cursor + 4) % total_items;
+    s_cursor_just_moved = true;
+  } else if (s_nav.up) {
+    s_menu_cursor = (s_menu_cursor - 1 + total_items) % total_items;
+    s_cursor_just_moved = true;
+  } else if (s_nav.down) {
+    s_menu_cursor = (s_menu_cursor + 1) % total_items;
+    s_cursor_just_moved = true;
+  }
+
+  if (s_menu_cursor < 0) s_menu_cursor = 0;
+  if (s_menu_cursor >= total_items) s_menu_cursor = total_items - 1;
+}
+
+static void ReturnToMainMenu(void) {
+  int prev_cat = (int)s_current_screen - 1;
+  s_current_screen = kScreen_MainMenu;
+  s_menu_cursor = (prev_cat >= 0 && prev_cat < 7) ? prev_cat : 0;
+  s_cursor_just_moved = true;
+  SyncStagedSettingsFromActive();
+}
+
+static void SetScreen(MenuScreen screen) {
+  s_current_screen = screen;
+  s_menu_cursor = 0;
+  s_cursor_just_moved = true;
+  SyncStagedSettingsFromActive();
+}
+
 // Divisor decorativo de seção
-static void MenuSection_Header(const char *title) {
+static void CardSection_Header(const char *title) {
   float avail_w = ImGui::GetContentRegionAvail().x;
   ImVec2 pos = ImGui::GetCursorScreenPos();
   ImDrawList *draw_list = ImGui::GetWindowDrawList();
@@ -308,83 +408,93 @@ static void MenuSection_Header(const char *title) {
   ImGui::Dummy(ImVec2(avail_w, line_h + 12.0f));
 }
 
-// Linha de item do Menu Principal (Categorias)
-static bool MenuRow_MainMenuItem(
+// Card do Menu Principal (Categorias)
+static bool Card_MainMenu(
+    int index,
     const char *id,
     const char *title,
     const char *desc,
     bool is_danger = false)
 {
   ImGuiIO& io = ImGui::GetIO();
-  float row_w = ImGui::GetContentRegionAvail().x;
-  if (row_w < 100.0f) row_w = 400.0f;
+  float card_w = ImGui::GetContentRegionAvail().x;
+  if (card_w < 100.0f) card_w = 400.0f;
   float font_scale = io.FontGlobalScale;
   float line_h = ImGui::GetTextLineHeight();
-  float row_h = 56.0f * font_scale;
+  float card_h = 64.0f * font_scale;
 
   ImVec2 cursor_pos = ImGui::GetCursorScreenPos();
+  bool is_selected = (s_menu_cursor == index);
+
+  if (is_selected && s_cursor_just_moved) {
+    ImGui::SetScrollHereY(0.4f);
+  }
 
   ImGui::PushID(id);
-  ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-
-  bool clicked = ImGui::Selectable("##item", false, ImGuiSelectableFlags_AllowOverlap, ImVec2(row_w, row_h));
-  if (s_needs_focus_first) {
-    ImGui::SetItemDefaultFocus();
-    s_needs_focus_first = false;
-  }
-  bool is_focused = ImGui::IsItemFocused();
+  ImGui::InvisibleButton("##hitbox", ImVec2(card_w, card_h));
   bool is_hovered = ImGui::IsItemHovered();
-  ImGui::PopStyleColor(3);
+  bool is_clicked = ImGui::IsItemClicked();
+
+  if (is_hovered && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) {
+    s_menu_cursor = index;
+    is_selected = true;
+  }
+  if (is_clicked) {
+    s_menu_cursor = index;
+    is_selected = true;
+  }
 
   ImDrawList *draw_list = ImGui::GetWindowDrawList();
   ImVec2 min_p = cursor_pos;
-  ImVec2 max_p = ImVec2(cursor_pos.x + row_w, cursor_pos.y + row_h);
+  ImVec2 max_p = ImVec2(cursor_pos.x + card_w, cursor_pos.y + card_h);
 
-  if (is_focused) {
-    draw_list->AddRectFilled(min_p, max_p, is_danger ? IM_COL32(180, 45, 45, 60) : IM_COL32(199, 166, 56, 55), 8.0f);
-    draw_list->AddRect(min_p, max_p, is_danger ? IM_COL32(240, 70, 70, 240) : IM_COL32(250, 217, 64, 240), 8.0f, 0, 2.0f);
+  // Background and Border
+  if (is_selected) {
+    draw_list->AddRectFilled(min_p, max_p, is_danger ? IM_COL32(100, 30, 30, 240) : IM_COL32(32, 54, 42, 240), 7.0f);
+    draw_list->AddRect(min_p, max_p, is_danger ? IM_COL32(255, 90, 90, 255) : IM_COL32(250, 217, 64, 255), 7.0f, 0, 2.0f);
   } else if (is_hovered) {
-    draw_list->AddRectFilled(min_p, max_p, is_danger ? IM_COL32(120, 30, 30, 100) : IM_COL32(35, 48, 40, 160), 8.0f);
-    draw_list->AddRect(min_p, max_p, is_danger ? IM_COL32(180, 50, 50, 180) : IM_COL32(80, 110, 95, 140), 8.0f, 0, 1.0f);
+    draw_list->AddRectFilled(min_p, max_p, is_danger ? IM_COL32(70, 22, 22, 200) : IM_COL32(24, 36, 30, 200), 7.0f);
+    draw_list->AddRect(min_p, max_p, is_danger ? IM_COL32(200, 70, 70, 180) : IM_COL32(80, 115, 95, 180), 7.0f, 0, 1.2f);
   } else {
-    draw_list->AddRectFilled(min_p, max_p, is_danger ? IM_COL32(60, 20, 20, 120) : IM_COL32(20, 26, 22, 140), 8.0f);
-    draw_list->AddRect(min_p, max_p, is_danger ? IM_COL32(140, 40, 40, 100) : IM_COL32(50, 68, 58, 90), 8.0f, 0, 1.0f);
+    draw_list->AddRectFilled(min_p, max_p, is_danger ? IM_COL32(40, 18, 18, 170) : IM_COL32(18, 24, 20, 180), 7.0f);
+    draw_list->AddRect(min_p, max_p, is_danger ? IM_COL32(110, 40, 40, 120) : IM_COL32(45, 62, 52, 120), 7.0f, 0, 1.0f);
   }
 
-  float text_x = min_p.x + 20.0f;
-  float title_y = min_p.y + 10.0f;
+  // Header Title & Indicator
+  float text_x = min_p.x + 18.0f;
+  float title_y = min_p.y + 11.0f;
 
-  if (is_focused) {
-    draw_list->AddText(ImVec2(text_x, title_y), is_danger ? IM_COL32(255, 90, 90, 255) : IM_COL32(250, 217, 64, 255), ">");
-    text_x += 18.0f;
+  if (is_selected) {
+    draw_list->AddText(ImVec2(text_x, title_y), is_danger ? IM_COL32(255, 110, 110, 255) : IM_COL32(250, 217, 64, 255), ">");
+    text_x += 20.0f;
   }
 
-  ImU32 title_col = is_focused ? (is_danger ? IM_COL32(255, 120, 120, 255) : IM_COL32(255, 235, 110, 255))
-                               : (is_danger ? IM_COL32(240, 160, 160, 255) : IM_COL32(240, 242, 238, 255));
+  ImU32 title_col = is_selected ? (is_danger ? IM_COL32(255, 130, 130, 255) : IM_COL32(255, 235, 100, 255))
+                                : (is_danger ? IM_COL32(240, 160, 160, 255) : IM_COL32(240, 245, 240, 255));
   draw_list->AddText(ImVec2(text_x, title_y), title_col, title);
 
+  // Description
   if (desc && desc[0]) {
     float desc_y = title_y + line_h + 3.0f;
-    draw_list->AddText(ImVec2(text_x, desc_y), IM_COL32(145, 170, 155, 255), desc);
+    draw_list->AddText(ImVec2(text_x, desc_y), IM_COL32(148, 175, 160, 255), desc);
   }
 
-  float badge_w = is_danger ? (120.0f * font_scale) : (110.0f * font_scale);
+  // Right Badge Pill
+  float badge_w = is_danger ? (125.0f * font_scale) : (115.0f * font_scale);
   float badge_h = 32.0f * font_scale;
-  float badge_x = max_p.x - badge_w - 16.0f;
-  float badge_y = min_p.y + (row_h - badge_h) * 0.5f;
+  float badge_x = max_p.x - badge_w - 18.0f;
+  float badge_y = min_p.y + (card_h - badge_h) * 0.5f;
 
   ImVec2 b_min = ImVec2(badge_x, badge_y);
   ImVec2 b_max = ImVec2(badge_x + badge_w, badge_y + badge_h);
 
-  ImU32 b_bg = is_danger ? (is_focused ? IM_COL32(180, 40, 40, 240) : IM_COL32(100, 25, 25, 180))
-                         : (is_focused ? IM_COL32(60, 115, 80, 240) : IM_COL32(28, 42, 34, 180));
-  ImU32 b_border = is_danger ? IM_COL32(240, 80, 80, 220)
-                             : (is_focused ? IM_COL32(250, 217, 64, 240) : IM_COL32(70, 100, 85, 140));
+  ImU32 b_bg = is_danger ? (is_selected ? IM_COL32(190, 45, 45, 240) : IM_COL32(110, 28, 28, 190))
+                         : (is_selected ? IM_COL32(50, 120, 75, 240) : IM_COL32(28, 44, 35, 190));
+  ImU32 b_border = is_danger ? IM_COL32(255, 90, 90, 230)
+                             : (is_selected ? IM_COL32(250, 217, 64, 240) : IM_COL32(75, 105, 90, 150));
 
-  draw_list->AddRectFilled(b_min, b_max, b_bg, 4.0f);
-  draw_list->AddRect(b_min, b_max, b_border, 4.0f, 0, is_focused ? 1.8f : 1.0f);
+  draw_list->AddRectFilled(b_min, b_max, b_bg, 5.0f);
+  draw_list->AddRect(b_min, b_max, b_border, 5.0f, 0, is_selected ? 1.8f : 1.0f);
 
   const char *badge_text = is_danger ? "SAIR  [X]" : "ENTRAR  >";
   ImVec2 b_sz = ImGui::CalcTextSize(badge_text);
@@ -392,26 +502,15 @@ static bool MenuRow_MainMenuItem(
   float by = b_min.y + (badge_h - b_sz.y) * 0.5f;
   draw_list->AddText(ImVec2(bx, by), IM_COL32(255, 255, 255, 255), badge_text);
 
-  bool triggered = false;
-  if (is_focused) {
-    if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown) ||
-        ImGui::IsKeyPressed(ImGuiKey_Enter) ||
-        ImGui::IsKeyPressed(ImGuiKey_Space)) {
-      triggered = true;
-    }
-  }
-
-  if (clicked) {
-    triggered = true;
-  }
+  bool triggered = (is_selected && s_nav.confirm) || is_clicked;
 
   ImGui::PopID();
   return triggered;
 }
 
-// Linha com Stepper com STAGING: permite navegar e pré-visualizar sem aplicar!
-// Só aplica quando o usuário pressiona [A] ou clica no botão Aplicar.
-static bool MenuRow_StagedStepper(
+// Card com Stepper (Staged: navega e pré-visualiza com muito espaço, aplica com [A])
+static bool Card_StagedStepper(
+    int index,
     const char *id,
     const char *title,
     const char *desc,
@@ -422,166 +521,184 @@ static bool MenuRow_StagedStepper(
     bool *out_applied)
 {
   ImGuiIO& io = ImGui::GetIO();
-  float row_w = ImGui::GetContentRegionAvail().x;
-  if (row_w < 100.0f) row_w = 400.0f;
+  float card_w = ImGui::GetContentRegionAvail().x;
+  if (card_w < 100.0f) card_w = 400.0f;
   float font_scale = io.FontGlobalScale;
   float line_h = ImGui::GetTextLineHeight();
-  float row_h = (desc && desc[0]) ? (52.0f * font_scale) : (40.0f * font_scale);
-  if (row_h < line_h + 14.0f) row_h = line_h + 14.0f;
+
+  bool has_pending = (*staged_val != active_val);
+  float card_h = has_pending ? (120.0f * font_scale) : (88.0f * font_scale);
 
   ImVec2 cursor_pos = ImGui::GetCursorScreenPos();
+  bool is_selected = (s_menu_cursor == index);
+
+  if (is_selected && s_cursor_just_moved) {
+    ImGui::SetScrollHereY(0.4f);
+  }
 
   ImGui::PushID(id);
-  ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-
-  bool row_clicked = ImGui::Selectable("##row", false, ImGuiSelectableFlags_AllowOverlap, ImVec2(row_w, row_h));
-  if (s_needs_focus_first) {
-    ImGui::SetItemDefaultFocus();
-    s_needs_focus_first = false;
-  }
-  bool is_focused = ImGui::IsItemFocused();
+  ImGui::InvisibleButton("##hitbox", ImVec2(card_w, card_h));
   bool is_hovered = ImGui::IsItemHovered();
-  ImGui::PopStyleColor(3);
+  bool is_clicked = ImGui::IsItemClicked();
+
+  if (is_hovered && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) {
+    s_menu_cursor = index;
+    is_selected = true;
+  }
+  if (is_clicked) {
+    s_menu_cursor = index;
+    is_selected = true;
+  }
 
   ImDrawList *draw_list = ImGui::GetWindowDrawList();
   ImVec2 min_p = cursor_pos;
-  ImVec2 max_p = ImVec2(cursor_pos.x + row_w, cursor_pos.y + row_h);
+  ImVec2 max_p = ImVec2(cursor_pos.x + card_w, cursor_pos.y + card_h);
 
-  bool has_pending_change = (*staged_val != active_val);
-
-  if (is_focused) {
-    draw_list->AddRectFilled(min_p, max_p, has_pending_change ? IM_COL32(199, 140, 40, 60) : IM_COL32(199, 166, 56, 50), 6.0f);
-    draw_list->AddRect(min_p, max_p, has_pending_change ? IM_COL32(255, 180, 50, 240) : IM_COL32(250, 217, 64, 230), 6.0f, 0, 1.8f);
+  // Background and Border
+  if (is_selected) {
+    draw_list->AddRectFilled(min_p, max_p, has_pending ? IM_COL32(38, 48, 32, 245) : IM_COL32(30, 50, 38, 240), 7.0f);
+    draw_list->AddRect(min_p, max_p, has_pending ? IM_COL32(255, 190, 50, 255) : IM_COL32(250, 217, 64, 255), 7.0f, 0, 2.0f);
   } else if (is_hovered) {
-    draw_list->AddRectFilled(min_p, max_p, IM_COL32(35, 48, 40, 160), 6.0f);
-    draw_list->AddRect(min_p, max_p, IM_COL32(80, 110, 95, 140), 6.0f, 0, 1.0f);
+    draw_list->AddRectFilled(min_p, max_p, IM_COL32(24, 36, 30, 200), 7.0f);
+    draw_list->AddRect(min_p, max_p, IM_COL32(80, 115, 95, 180), 7.0f, 0, 1.2f);
   } else {
-    draw_list->AddRectFilled(min_p, max_p, IM_COL32(20, 26, 22, 130), 6.0f);
-    draw_list->AddRect(min_p, max_p, IM_COL32(50, 68, 58, 80), 6.0f, 0, 1.0f);
+    draw_list->AddRectFilled(min_p, max_p, IM_COL32(18, 24, 20, 180), 7.0f);
+    draw_list->AddRect(min_p, max_p, IM_COL32(45, 62, 52, 120), 7.0f, 0, 1.0f);
   }
 
-  float text_x = min_p.x + 16.0f;
-  float title_y = min_p.y + ((desc && desc[0]) ? 8.0f : ((row_h - line_h) * 0.5f));
+  // 1. Header Line: Title (left) and Status Pill Badge (right)
+  float text_x = min_p.x + 18.0f;
+  float title_y = min_p.y + 9.0f;
 
-  if (is_focused) {
+  if (is_selected) {
     draw_list->AddText(ImVec2(text_x, title_y), IM_COL32(250, 217, 64, 255), ">");
-    text_x += 16.0f;
+    text_x += 20.0f;
   }
 
-  ImU32 title_col = is_focused ? IM_COL32(255, 235, 110, 255) : IM_COL32(240, 242, 238, 255);
+  ImU32 title_col = is_selected ? IM_COL32(255, 235, 100, 255) : IM_COL32(240, 245, 240, 255);
   draw_list->AddText(ImVec2(text_x, title_y), title_col, title);
 
-  if (desc && desc[0]) {
-    float desc_y = title_y + line_h + 3.0f;
-    if (has_pending_change) {
-      draw_list->AddText(ImVec2(text_x, desc_y), IM_COL32(255, 200, 80, 255), "Alteração pendente - Pressione [A] para aplicar");
-    } else {
-      draw_list->AddText(ImVec2(text_x, desc_y), IM_COL32(145, 170, 155, 255), desc);
-    }
+  // Status Badge Pill at top-right
+  const char *badge_str = has_pending ? "PENDENTE" : "ATIVO";
+  ImVec2 badge_sz = ImGui::CalcTextSize(badge_str);
+  float badge_w = badge_sz.x + 24.0f * font_scale;
+  float badge_h = 24.0f * font_scale;
+  float badge_x = max_p.x - badge_w - 16.0f;
+  float badge_y = min_p.y + 8.0f;
+
+  ImVec2 b_min = ImVec2(badge_x, badge_y);
+  ImVec2 b_max = ImVec2(badge_x + badge_w, badge_y + badge_h);
+  ImU32 b_bg = has_pending ? IM_COL32(180, 110, 20, 230) : IM_COL32(30, 95, 55, 200);
+  ImU32 b_border = has_pending ? IM_COL32(255, 180, 40, 255) : IM_COL32(50, 160, 95, 220);
+
+  draw_list->AddRectFilled(b_min, b_max, b_bg, 4.0f);
+  draw_list->AddRect(b_min, b_max, b_border, 4.0f, 0, 1.2f);
+  draw_list->AddText(ImVec2(b_min.x + (badge_w - badge_sz.x) * 0.5f, b_min.y + (badge_h - badge_sz.y) * 0.5f),
+                     has_pending ? IM_COL32(255, 240, 180, 255) : IM_COL32(180, 245, 200, 255), badge_str);
+
+  // 2. Full-Width Description
+  float desc_y = title_y + line_h + 2.0f;
+  if (has_pending) {
+    draw_list->AddText(ImVec2(text_x, desc_y), IM_COL32(255, 205, 90, 255), "Pre-visualizacao ativa - Pressione [A] para aplicar");
+  } else if (desc && desc[0]) {
+    draw_list->AddText(ImVec2(text_x, desc_y), IM_COL32(148, 175, 160, 255), desc);
   }
 
-  // Controle Stepper no lado direito: [ < ]  Opção  [ > ]  [ APLICAR (A) ]
-  float apply_btn_w = has_pending_change ? (125.0f * font_scale) : (75.0f * font_scale);
-  float arrow_btn_w = 30.0f * font_scale;
-  float ctrl_h = 30.0f * font_scale;
-  float ctrl_y = min_p.y + (row_h - ctrl_h) * 0.5f;
+  // 3. Full-Width Stepper Row: [ < ] ====== Option Value ====== [ > ]
+  float ctrl_y = desc_y + line_h + 5.0f;
+  float ctrl_h = 32.0f * font_scale;
+  float arrow_btn_w = 48.0f * font_scale;
 
-  float total_ctrl_w = 380.0f * font_scale;
-  if (total_ctrl_w > row_w * 0.55f) total_ctrl_w = row_w * 0.55f;
+  ImVec2 left_btn_min = ImVec2(min_p.x + 16.0f, ctrl_y);
+  ImVec2 left_btn_max = ImVec2(left_btn_min.x + arrow_btn_w, ctrl_y + ctrl_h);
 
-  float apply_btn_x = max_p.x - apply_btn_w - 12.0f;
-  ImVec2 app_btn_min = ImVec2(apply_btn_x, ctrl_y);
-  ImVec2 app_btn_max = ImVec2(apply_btn_x + apply_btn_w, ctrl_y + ctrl_h);
+  ImVec2 right_btn_max = ImVec2(max_p.x - 16.0f, ctrl_y + ctrl_h);
+  ImVec2 right_btn_min = ImVec2(right_btn_max.x - arrow_btn_w, ctrl_y);
 
-  float stepper_area_w = total_ctrl_w - apply_btn_w - 8.0f;
-  float stepper_x = apply_btn_x - stepper_area_w - 8.0f;
-
-  ImVec2 left_btn_min = ImVec2(stepper_x, ctrl_y);
-  ImVec2 left_btn_max = ImVec2(stepper_x + arrow_btn_w, ctrl_y + ctrl_h);
-
-  ImVec2 right_btn_min = ImVec2(stepper_x + stepper_area_w - arrow_btn_w, ctrl_y);
-  ImVec2 right_btn_max = ImVec2(stepper_x + stepper_area_w, ctrl_y + ctrl_h);
-
-  ImVec2 val_min = ImVec2(left_btn_max.x + 3.0f, ctrl_y);
-  ImVec2 val_max = ImVec2(right_btn_min.x - 3.0f, ctrl_y + ctrl_h);
-
-  // Badge da opção
-  draw_list->AddRectFilled(val_min, val_max, IM_COL32(12, 16, 14, 230), 4.0f);
-  draw_list->AddRect(val_min, val_max, has_pending_change ? IM_COL32(250, 180, 50, 200) : (is_focused ? IM_COL32(199, 166, 56, 180) : IM_COL32(50, 70, 60, 130)), 4.0f);
-
-  const char *opt_text = (*staged_val >= 0 && *staged_val < option_count) ? options[*staged_val] : "";
-  ImVec2 opt_sz = ImGui::CalcTextSize(opt_text);
-  float opt_x = val_min.x + (val_max.x - val_min.x - opt_sz.x) * 0.5f;
-  float opt_y = val_min.y + (ctrl_h - opt_sz.y) * 0.5f;
-  if (opt_x < val_min.x + 4.0f) opt_x = val_min.x + 4.0f;
-  draw_list->AddText(ImVec2(opt_x, opt_y), has_pending_change ? IM_COL32(255, 225, 120, 255) : (is_focused ? IM_COL32(255, 240, 160, 255) : IM_COL32(220, 230, 220, 255)), opt_text);
+  ImVec2 val_min = ImVec2(left_btn_max.x + 8.0f, ctrl_y);
+  ImVec2 val_max = ImVec2(right_btn_min.x - 8.0f, ctrl_y + ctrl_h);
 
   bool in_left = io.MousePos.x >= left_btn_min.x && io.MousePos.x <= left_btn_max.x &&
                  io.MousePos.y >= left_btn_min.y && io.MousePos.y <= left_btn_max.y;
   bool in_right = io.MousePos.x >= right_btn_min.x && io.MousePos.x <= right_btn_max.x &&
                   io.MousePos.y >= right_btn_min.y && io.MousePos.y <= right_btn_max.y;
-  bool in_apply = io.MousePos.x >= app_btn_min.x && io.MousePos.x <= app_btn_max.x &&
-                  io.MousePos.y >= app_btn_min.y && io.MousePos.y <= app_btn_max.y;
+  bool in_val = io.MousePos.x >= val_min.x && io.MousePos.x <= val_max.x &&
+                io.MousePos.y >= val_min.y && io.MousePos.y <= val_max.y;
 
-  draw_list->AddRectFilled(left_btn_min, left_btn_max, in_left ? IM_COL32(60, 90, 70, 240) : IM_COL32(26, 36, 30, 200), 4.0f);
-  draw_list->AddRect(left_btn_min, left_btn_max, IM_COL32(80, 110, 90, 160), 4.0f);
+  // Left Arrow Button
+  draw_list->AddRectFilled(left_btn_min, left_btn_max, in_left ? IM_COL32(50, 100, 70, 240) : (is_selected ? IM_COL32(28, 48, 36, 230) : IM_COL32(18, 26, 22, 200)), 5.0f);
+  draw_list->AddRect(left_btn_min, left_btn_max, is_selected ? IM_COL32(250, 217, 64, 200) : IM_COL32(60, 90, 75, 160), 5.0f, 0, 1.2f);
   ImVec2 al_sz = ImGui::CalcTextSize("<");
   draw_list->AddText(ImVec2(left_btn_min.x + (arrow_btn_w - al_sz.x) * 0.5f, ctrl_y + (ctrl_h - al_sz.y) * 0.5f),
-                     in_left ? IM_COL32(255, 230, 100, 255) : IM_COL32(200, 200, 190, 255), "<");
+                     is_selected ? IM_COL32(255, 230, 100, 255) : IM_COL32(180, 200, 190, 255), "<");
 
-  draw_list->AddRectFilled(right_btn_min, right_btn_max, in_right ? IM_COL32(60, 90, 70, 240) : IM_COL32(26, 36, 30, 200), 4.0f);
-  draw_list->AddRect(right_btn_min, right_btn_max, IM_COL32(80, 110, 90, 160), 4.0f);
+  // Right Arrow Button
+  draw_list->AddRectFilled(right_btn_min, right_btn_max, in_right ? IM_COL32(50, 100, 70, 240) : (is_selected ? IM_COL32(28, 48, 36, 230) : IM_COL32(18, 26, 22, 200)), 5.0f);
+  draw_list->AddRect(right_btn_min, right_btn_max, is_selected ? IM_COL32(250, 217, 64, 200) : IM_COL32(60, 90, 75, 160), 5.0f, 0, 1.2f);
   ImVec2 ar_sz = ImGui::CalcTextSize(">");
   draw_list->AddText(ImVec2(right_btn_min.x + (arrow_btn_w - ar_sz.x) * 0.5f, ctrl_y + (ctrl_h - ar_sz.y) * 0.5f),
-                     in_right ? IM_COL32(255, 230, 100, 255) : IM_COL32(200, 200, 190, 255), ">");
+                     is_selected ? IM_COL32(255, 230, 100, 255) : IM_COL32(180, 200, 190, 255), ">");
 
-  // Botão de Aplicar ou Badge Ativo
-  if (has_pending_change) {
-    ImU32 app_bg = (is_focused || in_apply) ? IM_COL32(200, 150, 40, 240) : IM_COL32(160, 110, 30, 200);
-    draw_list->AddRectFilled(app_btn_min, app_btn_max, app_bg, 4.0f);
-    draw_list->AddRect(app_btn_min, app_btn_max, IM_COL32(255, 220, 80, 255), 4.0f, 0, 1.5f);
-    const char *app_str = "APLICAR (A)";
+  // Center Option Display Box (Plenty of width for long strings!)
+  ImU32 val_bg = has_pending ? IM_COL32(24, 30, 22, 240) : IM_COL32(12, 18, 15, 240);
+  ImU32 val_border = has_pending ? IM_COL32(250, 180, 40, 220) : (is_selected ? IM_COL32(199, 166, 56, 180) : IM_COL32(50, 70, 60, 130));
+  draw_list->AddRectFilled(val_min, val_max, val_bg, 5.0f);
+  draw_list->AddRect(val_min, val_max, val_border, 5.0f, 0, is_selected ? 1.5f : 1.0f);
+
+  const char *opt_text = (*staged_val >= 0 && *staged_val < option_count) ? options[*staged_val] : "";
+  ImVec2 opt_sz = ImGui::CalcTextSize(opt_text);
+  float opt_x = val_min.x + (val_max.x - val_min.x - opt_sz.x) * 0.5f;
+  float opt_y = val_min.y + (ctrl_h - opt_sz.y) * 0.5f;
+  if (opt_x < val_min.x + 8.0f) opt_x = val_min.x + 8.0f;
+  draw_list->AddText(ImVec2(opt_x, opt_y), has_pending ? IM_COL32(255, 225, 100, 255) : (is_selected ? IM_COL32(255, 245, 180, 255) : IM_COL32(220, 235, 225, 255)), opt_text);
+
+  // 4. Staged Apply Banner (shown when staged != active)
+  ImVec2 app_btn_min = ImVec2(min_p.x + 16.0f, ctrl_y + ctrl_h + 6.0f * font_scale);
+  ImVec2 app_btn_max = ImVec2(max_p.x - 16.0f, app_btn_min.y + 26.0f * font_scale);
+  bool in_apply = false;
+
+  if (has_pending) {
+    in_apply = io.MousePos.x >= app_btn_min.x && io.MousePos.x <= app_btn_max.x &&
+               io.MousePos.y >= app_btn_min.y && io.MousePos.y <= app_btn_max.y;
+
+    ImU32 app_bg = (is_selected || in_apply) ? IM_COL32(195, 130, 25, 245) : IM_COL32(150, 95, 20, 210);
+    ImU32 app_border = (is_selected || in_apply) ? IM_COL32(255, 220, 80, 255) : IM_COL32(210, 150, 40, 200);
+
+    draw_list->AddRectFilled(app_btn_min, app_btn_max, app_bg, 5.0f);
+    draw_list->AddRect(app_btn_min, app_btn_max, app_border, 5.0f, 0, 1.5f);
+
+    const char *app_str = "* CONFIRMAR E APLICAR ESTA OPCAO (Pressione Botao A)";
     ImVec2 asz = ImGui::CalcTextSize(app_str);
-    draw_list->AddText(ImVec2(app_btn_min.x + (apply_btn_w - asz.x) * 0.5f, ctrl_y + (ctrl_h - asz.y) * 0.5f), IM_COL32(255, 255, 255, 255), app_str);
-  } else {
-    draw_list->AddRectFilled(app_btn_min, app_btn_max, IM_COL32(25, 45, 32, 180), 4.0f);
-    draw_list->AddRect(app_btn_min, app_btn_max, IM_COL32(60, 110, 75, 160), 4.0f);
-    const char *act_str = "ATIVO";
-    ImVec2 asz = ImGui::CalcTextSize(act_str);
-    draw_list->AddText(ImVec2(app_btn_min.x + (apply_btn_w - asz.x) * 0.5f, ctrl_y + (ctrl_h - asz.y) * 0.5f), IM_COL32(140, 200, 160, 255), act_str);
+    draw_list->AddText(ImVec2(app_btn_min.x + (card_w - 32.0f - asz.x) * 0.5f, app_btn_min.y + (26.0f * font_scale - asz.y) * 0.5f),
+                       IM_COL32(255, 255, 255, 255), app_str);
   }
 
   *out_applied = false;
 
-  // Entrada de navegação: Left/Right só altera a seleção no buffer de exibição (staging)
-  if (is_focused) {
-    if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft, true) ||
-        ImGui::IsKeyPressed(ImGuiKey_GamepadLStickLeft, true) ||
-        ImGui::IsKeyPressed(ImGuiKey_LeftArrow, true)) {
+  // Controller / Keyboard Navigation
+  if (is_selected) {
+    if (s_nav.left) {
       *staged_val = (*staged_val - 1 + option_count) % option_count;
-    } else if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight, true) ||
-               ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight, true) ||
-               ImGui::IsKeyPressed(ImGuiKey_RightArrow, true)) {
+    } else if (s_nav.right) {
       *staged_val = (*staged_val + 1) % option_count;
-    } else if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown) ||
-               ImGui::IsKeyPressed(ImGuiKey_Enter) ||
-               ImGui::IsKeyPressed(ImGuiKey_Space)) {
-      if (has_pending_change) {
+    } else if (s_nav.confirm) {
+      if (has_pending) {
         *out_applied = true;
+      } else {
+        *staged_val = (*staged_val + 1) % option_count;
       }
     }
   }
 
-  if (row_clicked) {
+  // Mouse Interaction
+  if (is_clicked) {
     if (in_left) {
       *staged_val = (*staged_val - 1 + option_count) % option_count;
     } else if (in_right) {
       *staged_val = (*staged_val + 1) % option_count;
-    } else if (in_apply || has_pending_change) {
+    } else if (in_apply || (has_pending && in_val)) {
       *out_applied = true;
-    } else {
+    } else if (in_val) {
       *staged_val = (*staged_val + 1) % option_count;
     }
   }
@@ -590,105 +707,124 @@ static bool MenuRow_StagedStepper(
   return *out_applied;
 }
 
-// Linha com Toggle (LIGADO / DESLIGADO)
-static bool MenuRow_Toggle(
+// Card com Toggle (LIGADO / DESLIGADO)
+static bool Card_Toggle(
+    int index,
     const char *id,
     const char *title,
     const char *desc,
     bool *value)
 {
   ImGuiIO& io = ImGui::GetIO();
-  float row_w = ImGui::GetContentRegionAvail().x;
-  if (row_w < 100.0f) row_w = 400.0f;
+  float card_w = ImGui::GetContentRegionAvail().x;
+  if (card_w < 100.0f) card_w = 400.0f;
   float font_scale = io.FontGlobalScale;
   float line_h = ImGui::GetTextLineHeight();
-  float row_h = (desc && desc[0]) ? (52.0f * font_scale) : (40.0f * font_scale);
-  if (row_h < line_h + 14.0f) row_h = line_h + 14.0f;
+  float card_h = 78.0f * font_scale;
 
   ImVec2 cursor_pos = ImGui::GetCursorScreenPos();
+  bool is_selected = (s_menu_cursor == index);
+
+  if (is_selected && s_cursor_just_moved) {
+    ImGui::SetScrollHereY(0.4f);
+  }
 
   ImGui::PushID(id);
-  ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-
-  bool row_clicked = ImGui::Selectable("##row", false, ImGuiSelectableFlags_AllowOverlap, ImVec2(row_w, row_h));
-  if (s_needs_focus_first) {
-    ImGui::SetItemDefaultFocus();
-    s_needs_focus_first = false;
-  }
-  bool is_focused = ImGui::IsItemFocused();
+  ImGui::InvisibleButton("##hitbox", ImVec2(card_w, card_h));
   bool is_hovered = ImGui::IsItemHovered();
-  ImGui::PopStyleColor(3);
+  bool is_clicked = ImGui::IsItemClicked();
+
+  if (is_hovered && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) {
+    s_menu_cursor = index;
+    is_selected = true;
+  }
+  if (is_clicked) {
+    s_menu_cursor = index;
+    is_selected = true;
+  }
 
   ImDrawList *draw_list = ImGui::GetWindowDrawList();
   ImVec2 min_p = cursor_pos;
-  ImVec2 max_p = ImVec2(cursor_pos.x + row_w, cursor_pos.y + row_h);
+  ImVec2 max_p = ImVec2(cursor_pos.x + card_w, cursor_pos.y + card_h);
 
-  if (is_focused) {
-    draw_list->AddRectFilled(min_p, max_p, IM_COL32(199, 166, 56, 50), 6.0f);
-    draw_list->AddRect(min_p, max_p, IM_COL32(250, 217, 64, 230), 6.0f, 0, 1.8f);
+  // Background and Border
+  if (is_selected) {
+    draw_list->AddRectFilled(min_p, max_p, IM_COL32(30, 50, 38, 240), 7.0f);
+    draw_list->AddRect(min_p, max_p, IM_COL32(250, 217, 64, 255), 7.0f, 0, 2.0f);
   } else if (is_hovered) {
-    draw_list->AddRectFilled(min_p, max_p, IM_COL32(35, 48, 40, 160), 6.0f);
-    draw_list->AddRect(min_p, max_p, IM_COL32(80, 110, 95, 140), 6.0f, 0, 1.0f);
+    draw_list->AddRectFilled(min_p, max_p, IM_COL32(24, 36, 30, 200), 7.0f);
+    draw_list->AddRect(min_p, max_p, IM_COL32(80, 115, 95, 180), 7.0f, 0, 1.2f);
   } else {
-    draw_list->AddRectFilled(min_p, max_p, IM_COL32(20, 26, 22, 130), 6.0f);
-    draw_list->AddRect(min_p, max_p, IM_COL32(50, 68, 58, 80), 6.0f, 0, 1.0f);
+    draw_list->AddRectFilled(min_p, max_p, IM_COL32(18, 24, 20, 180), 7.0f);
+    draw_list->AddRect(min_p, max_p, IM_COL32(45, 62, 52, 120), 7.0f, 0, 1.0f);
   }
 
-  float text_x = min_p.x + 16.0f;
-  float title_y = min_p.y + ((desc && desc[0]) ? 8.0f : ((row_h - line_h) * 0.5f));
+  // 1. Header Line: Title (left) and Status Pill Badge (right)
+  float text_x = min_p.x + 18.0f;
+  float title_y = min_p.y + 9.0f;
 
-  if (is_focused) {
+  if (is_selected) {
     draw_list->AddText(ImVec2(text_x, title_y), IM_COL32(250, 217, 64, 255), ">");
-    text_x += 16.0f;
+    text_x += 20.0f;
   }
 
-  ImU32 title_col = is_focused ? IM_COL32(255, 235, 110, 255) : IM_COL32(240, 242, 238, 255);
+  ImU32 title_col = is_selected ? IM_COL32(255, 235, 100, 255) : IM_COL32(240, 245, 240, 255);
   draw_list->AddText(ImVec2(text_x, title_y), title_col, title);
 
+  // Status Badge Pill
+  const char *badge_str = *value ? "LIGADO" : "DESLIGADO";
+  ImVec2 badge_sz = ImGui::CalcTextSize(badge_str);
+  float badge_w = badge_sz.x + 24.0f * font_scale;
+  float badge_h = 24.0f * font_scale;
+  float badge_x = max_p.x - badge_w - 16.0f;
+  float badge_y = min_p.y + 8.0f;
+
+  ImVec2 b_min = ImVec2(badge_x, badge_y);
+  ImVec2 b_max = ImVec2(badge_x + badge_w, badge_y + badge_h);
+  ImU32 b_bg = *value ? IM_COL32(35, 115, 65, 230) : IM_COL32(50, 60, 55, 190);
+  ImU32 b_border = *value ? IM_COL32(60, 180, 100, 255) : IM_COL32(80, 95, 90, 180);
+
+  draw_list->AddRectFilled(b_min, b_max, b_bg, 4.0f);
+  draw_list->AddRect(b_min, b_max, b_border, 4.0f, 0, 1.2f);
+  draw_list->AddText(ImVec2(b_min.x + (badge_w - badge_sz.x) * 0.5f, b_min.y + (badge_h - badge_sz.y) * 0.5f),
+                     *value ? IM_COL32(200, 255, 220, 255) : IM_COL32(180, 190, 185, 255), badge_str);
+
+  // 2. Full-Width Description
+  float desc_y = title_y + line_h + 2.0f;
   if (desc && desc[0]) {
-    float desc_y = title_y + line_h + 3.0f;
-    draw_list->AddText(ImVec2(text_x, desc_y), IM_COL32(145, 170, 155, 255), desc);
+    draw_list->AddText(ImVec2(text_x, desc_y), IM_COL32(148, 175, 160, 255), desc);
   }
 
-  float pill_w = 145.0f * font_scale;
-  float pill_h = 30.0f * font_scale;
-  float pill_x = max_p.x - pill_w - 14.0f;
-  float pill_y = min_p.y + (row_h - pill_h) * 0.5f;
+  // 3. Control Bar across the card
+  float ctrl_y = desc_y + line_h + 5.0f;
+  float ctrl_h = 26.0f * font_scale;
+  ImVec2 bar_min = ImVec2(min_p.x + 16.0f, ctrl_y);
+  ImVec2 bar_max = ImVec2(max_p.x - 16.0f, ctrl_y + ctrl_h);
 
-  ImVec2 pill_min = ImVec2(pill_x, pill_y);
-  ImVec2 pill_max = ImVec2(pill_x + pill_w, pill_y + pill_h);
+  ImU32 bar_bg = *value ? (is_selected ? IM_COL32(40, 120, 70, 240) : IM_COL32(28, 85, 50, 200))
+                        : (is_selected ? IM_COL32(32, 42, 36, 240) : IM_COL32(20, 28, 24, 200));
+  ImU32 bar_border = *value ? IM_COL32(70, 190, 110, 240) : IM_COL32(60, 80, 70, 160);
 
-  bool active = *value;
-  ImU32 pill_bg = active ? IM_COL32(35, 95, 55, 230) : IM_COL32(30, 36, 33, 200);
-  ImU32 pill_border = active ? (is_focused ? IM_COL32(250, 217, 64, 255) : IM_COL32(60, 180, 95, 220))
-                             : (is_focused ? IM_COL32(250, 217, 64, 180) : IM_COL32(70, 80, 75, 150));
+  draw_list->AddRectFilled(bar_min, bar_max, bar_bg, 5.0f);
+  draw_list->AddRect(bar_min, bar_max, bar_border, 5.0f, 0, is_selected ? 1.5f : 1.0f);
 
-  draw_list->AddRectFilled(pill_min, pill_max, pill_bg, 15.0f);
-  draw_list->AddRect(pill_min, pill_max, pill_border, 15.0f, 0, is_focused ? 2.0f : 1.5f);
-
-  const char *pill_text = active ? "LIGADO" : "DESLIGADO";
-  ImVec2 ts = ImGui::CalcTextSize(pill_text);
-  float tx = pill_min.x + (pill_w - ts.x) * 0.5f;
-  float ty = pill_min.y + (pill_h - ts.y) * 0.5f;
-  draw_list->AddText(ImVec2(tx, ty), active ? IM_COL32(230, 255, 235, 255) : IM_COL32(160, 170, 165, 255), pill_text);
+  const char *toggle_label = *value ? "[ <  ATIVADO / LIGADO  > ]" : "[ <  DESATIVADO  > ]";
+  ImVec2 tsz = ImGui::CalcTextSize(toggle_label);
+  draw_list->AddText(ImVec2(bar_min.x + (bar_max.x - bar_min.x - tsz.x) * 0.5f, bar_min.y + (ctrl_h - tsz.y) * 0.5f),
+                     *value ? IM_COL32(255, 255, 255, 255) : IM_COL32(180, 195, 185, 255), toggle_label);
 
   bool changed = false;
-  if (is_focused) {
-    if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown) ||
-        ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft) ||
-        ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight) ||
-        ImGui::IsKeyPressed(ImGuiKey_LeftArrow) ||
-        ImGui::IsKeyPressed(ImGuiKey_RightArrow) ||
-        ImGui::IsKeyPressed(ImGuiKey_Enter) ||
-        ImGui::IsKeyPressed(ImGuiKey_Space)) {
+
+  // Controller / Keyboard Navigation
+  if (is_selected) {
+    if (s_nav.confirm || s_nav.left || s_nav.right) {
       *value = !*value;
       changed = true;
     }
   }
 
-  if (row_clicked) {
+  // Mouse Interaction
+  if (is_clicked) {
     *value = !*value;
     changed = true;
   }
@@ -697,143 +833,166 @@ static bool MenuRow_Toggle(
   return changed;
 }
 
-// Linha com Slider de Volume
-static bool MenuRow_Slider(
+// Card com Slider Interativo (Volume, etc.)
+static bool Card_Slider(
+    int index,
     const char *id,
     const char *title,
     const char *desc,
     int *value,
     int min_val,
     int max_val,
-    int step = 5,
+    int step,
     const char *unit = "%")
 {
   ImGuiIO& io = ImGui::GetIO();
-  float row_w = ImGui::GetContentRegionAvail().x;
-  if (row_w < 100.0f) row_w = 400.0f;
+  float card_w = ImGui::GetContentRegionAvail().x;
+  if (card_w < 100.0f) card_w = 400.0f;
   float font_scale = io.FontGlobalScale;
   float line_h = ImGui::GetTextLineHeight();
-  float row_h = (desc && desc[0]) ? (52.0f * font_scale) : (40.0f * font_scale);
-  if (row_h < line_h + 14.0f) row_h = line_h + 14.0f;
+  float card_h = 84.0f * font_scale;
 
   ImVec2 cursor_pos = ImGui::GetCursorScreenPos();
+  bool is_selected = (s_menu_cursor == index);
+
+  if (is_selected && s_cursor_just_moved) {
+    ImGui::SetScrollHereY(0.4f);
+  }
 
   ImGui::PushID(id);
-  ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-
-  bool row_clicked = ImGui::Selectable("##row", false, ImGuiSelectableFlags_AllowOverlap, ImVec2(row_w, row_h));
-  if (s_needs_focus_first) {
-    ImGui::SetItemDefaultFocus();
-    s_needs_focus_first = false;
-  }
-  bool is_focused = ImGui::IsItemFocused();
+  ImGui::InvisibleButton("##hitbox", ImVec2(card_w, card_h));
   bool is_hovered = ImGui::IsItemHovered();
-  ImGui::PopStyleColor(3);
+  bool is_clicked = ImGui::IsItemClicked();
+
+  if (is_hovered && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) {
+    s_menu_cursor = index;
+    is_selected = true;
+  }
+  if (is_clicked) {
+    s_menu_cursor = index;
+    is_selected = true;
+  }
 
   ImDrawList *draw_list = ImGui::GetWindowDrawList();
   ImVec2 min_p = cursor_pos;
-  ImVec2 max_p = ImVec2(cursor_pos.x + row_w, cursor_pos.y + row_h);
+  ImVec2 max_p = ImVec2(cursor_pos.x + card_w, cursor_pos.y + card_h);
 
-  if (is_focused) {
-    draw_list->AddRectFilled(min_p, max_p, IM_COL32(199, 166, 56, 50), 6.0f);
-    draw_list->AddRect(min_p, max_p, IM_COL32(250, 217, 64, 230), 6.0f, 0, 1.8f);
+  // Background and Border
+  if (is_selected) {
+    draw_list->AddRectFilled(min_p, max_p, IM_COL32(30, 50, 38, 240), 7.0f);
+    draw_list->AddRect(min_p, max_p, IM_COL32(250, 217, 64, 255), 7.0f, 0, 2.0f);
   } else if (is_hovered) {
-    draw_list->AddRectFilled(min_p, max_p, IM_COL32(35, 48, 40, 160), 6.0f);
-    draw_list->AddRect(min_p, max_p, IM_COL32(80, 110, 95, 140), 6.0f, 0, 1.0f);
+    draw_list->AddRectFilled(min_p, max_p, IM_COL32(24, 36, 30, 200), 7.0f);
+    draw_list->AddRect(min_p, max_p, IM_COL32(80, 115, 95, 180), 7.0f, 0, 1.2f);
   } else {
-    draw_list->AddRectFilled(min_p, max_p, IM_COL32(20, 26, 22, 130), 6.0f);
-    draw_list->AddRect(min_p, max_p, IM_COL32(50, 68, 58, 80), 6.0f, 0, 1.0f);
+    draw_list->AddRectFilled(min_p, max_p, IM_COL32(18, 24, 20, 180), 7.0f);
+    draw_list->AddRect(min_p, max_p, IM_COL32(45, 62, 52, 120), 7.0f, 0, 1.0f);
   }
 
-  float text_x = min_p.x + 16.0f;
-  float title_y = min_p.y + ((desc && desc[0]) ? 8.0f : ((row_h - line_h) * 0.5f));
+  // 1. Header Line: Title (left) and Status Pill Badge (right)
+  float text_x = min_p.x + 18.0f;
+  float title_y = min_p.y + 9.0f;
 
-  if (is_focused) {
+  if (is_selected) {
     draw_list->AddText(ImVec2(text_x, title_y), IM_COL32(250, 217, 64, 255), ">");
-    text_x += 16.0f;
+    text_x += 20.0f;
   }
 
-  ImU32 title_col = is_focused ? IM_COL32(255, 235, 110, 255) : IM_COL32(240, 242, 238, 255);
+  ImU32 title_col = is_selected ? IM_COL32(255, 235, 100, 255) : IM_COL32(240, 245, 240, 255);
   draw_list->AddText(ImVec2(text_x, title_y), title_col, title);
 
+  // Status Badge Pill with numeric value
+  char badge_str[32];
+  snprintf(badge_str, sizeof(badge_str), "%d%s", *value, unit);
+  ImVec2 badge_sz = ImGui::CalcTextSize(badge_str);
+  float badge_w = badge_sz.x + 24.0f * font_scale;
+  float badge_h = 24.0f * font_scale;
+  float badge_x = max_p.x - badge_w - 16.0f;
+  float badge_y = min_p.y + 8.0f;
+
+  ImVec2 b_min = ImVec2(badge_x, badge_y);
+  ImVec2 b_max = ImVec2(badge_x + badge_w, badge_y + badge_h);
+  draw_list->AddRectFilled(b_min, b_max, IM_COL32(25, 45, 35, 200), 4.0f);
+  draw_list->AddRect(b_min, b_max, is_selected ? IM_COL32(250, 217, 64, 220) : IM_COL32(60, 95, 75, 180), 4.0f, 0, 1.2f);
+  draw_list->AddText(ImVec2(b_min.x + (badge_w - badge_sz.x) * 0.5f, b_min.y + (badge_h - badge_sz.y) * 0.5f),
+                     is_selected ? IM_COL32(255, 235, 120, 255) : IM_COL32(200, 240, 210, 255), badge_str);
+
+  // 2. Full-Width Description
+  float desc_y = title_y + line_h + 2.0f;
   if (desc && desc[0]) {
-    float desc_y = title_y + line_h + 3.0f;
-    draw_list->AddText(ImVec2(text_x, desc_y), IM_COL32(145, 170, 155, 255), desc);
+    draw_list->AddText(ImVec2(text_x, desc_y), IM_COL32(148, 175, 160, 255), desc);
   }
 
-  float bar_ctrl_w = 320.0f * font_scale;
-  if (bar_ctrl_w > row_w * 0.48f) bar_ctrl_w = row_w * 0.48f;
-  float arrow_btn_w = 30.0f * font_scale;
+  // 3. Slider Row: [ < - ] ====== Slider Track ====== [ + > ]
+  float ctrl_y = desc_y + line_h + 5.0f;
   float ctrl_h = 30.0f * font_scale;
-  float ctrl_y = min_p.y + (row_h - ctrl_h) * 0.5f;
-  float ctrl_x = max_p.x - bar_ctrl_w - 14.0f;
+  float arrow_btn_w = 48.0f * font_scale;
 
-  ImVec2 left_btn_min = ImVec2(ctrl_x, ctrl_y);
-  ImVec2 left_btn_max = ImVec2(ctrl_x + arrow_btn_w, ctrl_y + ctrl_h);
+  ImVec2 left_btn_min = ImVec2(min_p.x + 16.0f, ctrl_y);
+  ImVec2 left_btn_max = ImVec2(left_btn_min.x + arrow_btn_w, ctrl_y + ctrl_h);
 
-  ImVec2 right_btn_min = ImVec2(max_p.x - arrow_btn_w - 14.0f, ctrl_y);
-  ImVec2 right_btn_max = ImVec2(max_p.x - 14.0f, ctrl_y + ctrl_h);
+  ImVec2 right_btn_max = ImVec2(max_p.x - 16.0f, ctrl_y + ctrl_h);
+  ImVec2 right_btn_min = ImVec2(right_btn_max.x - arrow_btn_w, ctrl_y);
 
-  float text_box_w = 56.0f * font_scale;
-  ImVec2 bar_min = ImVec2(left_btn_max.x + 8.0f, ctrl_y + (ctrl_h - 10.0f) * 0.5f);
-  ImVec2 bar_max = ImVec2(right_btn_min.x - text_box_w - 8.0f, bar_min.y + 10.0f);
-
-  draw_list->AddRectFilled(bar_min, bar_max, IM_COL32(15, 22, 18, 255), 5.0f);
-  draw_list->AddRect(bar_min, bar_max, IM_COL32(60, 80, 70, 180), 5.0f);
-
-  float frac = (float)(*value - min_val) / (float)(max_val - min_val);
-  if (frac < 0.0f) frac = 0.0f;
-  if (frac > 1.0f) frac = 1.0f;
-
-  if (frac > 0.0f) {
-    ImVec2 fill_max = ImVec2(bar_min.x + (bar_max.x - bar_min.x) * frac, bar_max.y);
-    draw_list->AddRectFilled(bar_min, fill_max, is_focused ? IM_COL32(250, 217, 64, 255) : IM_COL32(60, 180, 95, 220), 5.0f);
-  }
-
-  char val_str[32];
-  snprintf(val_str, sizeof(val_str), "%d%s", *value, unit);
-  ImVec2 val_sz = ImGui::CalcTextSize(val_str);
-  float val_x = bar_max.x + 8.0f + (text_box_w - val_sz.x) * 0.5f;
-  float val_y = ctrl_y + (ctrl_h - val_sz.y) * 0.5f;
-  draw_list->AddText(ImVec2(val_x, val_y), is_focused ? IM_COL32(255, 230, 100, 255) : IM_COL32(220, 230, 220, 255), val_str);
+  ImVec2 track_min = ImVec2(left_btn_max.x + 10.0f, ctrl_y + (ctrl_h - 12.0f * font_scale) * 0.5f);
+  ImVec2 track_max = ImVec2(right_btn_min.x - 10.0f, track_min.y + 12.0f * font_scale);
 
   bool in_left = io.MousePos.x >= left_btn_min.x && io.MousePos.x <= left_btn_max.x &&
                  io.MousePos.y >= left_btn_min.y && io.MousePos.y <= left_btn_max.y;
   bool in_right = io.MousePos.x >= right_btn_min.x && io.MousePos.x <= right_btn_max.x &&
                   io.MousePos.y >= right_btn_min.y && io.MousePos.y <= right_btn_max.y;
 
-  draw_list->AddRectFilled(left_btn_min, left_btn_max, in_left ? IM_COL32(60, 90, 70, 240) : IM_COL32(26, 36, 30, 200), 4.0f);
-  draw_list->AddRect(left_btn_min, left_btn_max, IM_COL32(80, 110, 90, 160), 4.0f);
-  ImVec2 al_sz = ImGui::CalcTextSize("<");
+  // Left Button
+  draw_list->AddRectFilled(left_btn_min, left_btn_max, in_left ? IM_COL32(50, 100, 70, 240) : (is_selected ? IM_COL32(28, 48, 36, 230) : IM_COL32(18, 26, 22, 200)), 5.0f);
+  draw_list->AddRect(left_btn_min, left_btn_max, is_selected ? IM_COL32(250, 217, 64, 200) : IM_COL32(60, 90, 75, 160), 5.0f, 0, 1.2f);
+  ImVec2 al_sz = ImGui::CalcTextSize("< -");
   draw_list->AddText(ImVec2(left_btn_min.x + (arrow_btn_w - al_sz.x) * 0.5f, ctrl_y + (ctrl_h - al_sz.y) * 0.5f),
-                     in_left ? IM_COL32(255, 230, 100, 255) : IM_COL32(200, 200, 190, 255), "<");
+                     is_selected ? IM_COL32(255, 230, 100, 255) : IM_COL32(180, 200, 190, 255), "< -");
 
-  draw_list->AddRectFilled(right_btn_min, right_btn_max, in_right ? IM_COL32(60, 90, 70, 240) : IM_COL32(26, 36, 30, 200), 4.0f);
-  draw_list->AddRect(right_btn_min, right_btn_max, IM_COL32(80, 110, 90, 160), 4.0f);
-  ImVec2 ar_sz = ImGui::CalcTextSize(">");
+  // Right Button
+  draw_list->AddRectFilled(right_btn_min, right_btn_max, in_right ? IM_COL32(50, 100, 70, 240) : (is_selected ? IM_COL32(28, 48, 36, 230) : IM_COL32(18, 26, 22, 200)), 5.0f);
+  draw_list->AddRect(right_btn_min, right_btn_max, is_selected ? IM_COL32(250, 217, 64, 200) : IM_COL32(60, 90, 75, 160), 5.0f, 0, 1.2f);
+  ImVec2 ar_sz = ImGui::CalcTextSize("+ >");
   draw_list->AddText(ImVec2(right_btn_min.x + (arrow_btn_w - ar_sz.x) * 0.5f, ctrl_y + (ctrl_h - ar_sz.y) * 0.5f),
-                     in_right ? IM_COL32(255, 230, 100, 255) : IM_COL32(200, 200, 190, 255), ">");
+                     is_selected ? IM_COL32(255, 230, 100, 255) : IM_COL32(180, 200, 190, 255), "+ >");
+
+  // Track Background
+  draw_list->AddRectFilled(track_min, track_max, IM_COL32(12, 16, 14, 255), 6.0f);
+  draw_list->AddRect(track_min, track_max, IM_COL32(55, 75, 65, 180), 6.0f);
+
+  // Fill Bar
+  float frac = (max_val > min_val) ? ((float)(*value - min_val) / (float)(max_val - min_val)) : 0.0f;
+  if (frac < 0.0f) frac = 0.0f;
+  if (frac > 1.0f) frac = 1.0f;
+
+  if (frac > 0.0f) {
+    ImVec2 fill_max = ImVec2(track_min.x + (track_max.x - track_min.x) * frac, track_max.y);
+    draw_list->AddRectFilled(track_min, fill_max, is_selected ? IM_COL32(250, 217, 64, 255) : IM_COL32(50, 175, 90, 220), 6.0f);
+  }
+
+  // Thumb Knob
+  float knob_x = track_min.x + (track_max.x - track_min.x) * frac;
+  float knob_y = track_min.y + (track_max.y - track_min.y) * 0.5f;
+  draw_list->AddCircleFilled(ImVec2(knob_x, knob_y), 9.0f * font_scale, is_selected ? IM_COL32(255, 255, 255, 255) : IM_COL32(210, 225, 215, 255));
+  draw_list->AddCircle(ImVec2(knob_x, knob_y), 9.0f * font_scale, is_selected ? IM_COL32(250, 217, 64, 255) : IM_COL32(50, 80, 65, 255), 0, 2.0f);
 
   bool changed = false;
-  if (is_focused) {
-    if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft, true) ||
-        ImGui::IsKeyPressed(ImGuiKey_GamepadLStickLeft, true) ||
-        ImGui::IsKeyPressed(ImGuiKey_LeftArrow, true)) {
+
+  // Controller / Keyboard Navigation
+  if (is_selected) {
+    if (s_nav.left) {
       *value -= step;
       if (*value < min_val) *value = min_val;
       changed = true;
-    } else if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight, true) ||
-               ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight, true) ||
-               ImGui::IsKeyPressed(ImGuiKey_RightArrow, true)) {
+    } else if (s_nav.right) {
       *value += step;
       if (*value > max_val) *value = max_val;
       changed = true;
     }
   }
 
-  if (row_clicked) {
+  // Mouse Interaction
+  if (is_clicked) {
     if (in_left) {
       *value -= step;
       if (*value < min_val) *value = min_val;
@@ -842,8 +1001,8 @@ static bool MenuRow_Slider(
       *value += step;
       if (*value > max_val) *value = max_val;
       changed = true;
-    } else if (io.MousePos.x >= bar_min.x && io.MousePos.x <= bar_max.x) {
-      float click_frac = (io.MousePos.x - bar_min.x) / (bar_max.x - bar_min.x);
+    } else if (io.MousePos.x >= track_min.x && io.MousePos.x <= track_max.x) {
+      float click_frac = (io.MousePos.x - track_min.x) / (track_max.x - track_min.x);
       *value = min_val + (int)(click_frac * (max_val - min_val) + 0.5f);
       if (*value < min_val) *value = min_val;
       if (*value > max_val) *value = max_val;
@@ -855,106 +1014,208 @@ static bool MenuRow_Slider(
   return changed;
 }
 
-// Linha com Botão de Ação
-static bool MenuRow_Button(
+// Card com Botão de Ação
+static bool Card_Button(
+    int index,
     const char *id,
     const char *title,
     const char *desc,
-    const char *button_label,
-    bool danger = false)
+    const char *btn_label,
+    bool is_danger = false)
 {
   ImGuiIO& io = ImGui::GetIO();
-  float row_w = ImGui::GetContentRegionAvail().x;
-  if (row_w < 100.0f) row_w = 400.0f;
+  float card_w = ImGui::GetContentRegionAvail().x;
+  if (card_w < 100.0f) card_w = 400.0f;
   float font_scale = io.FontGlobalScale;
   float line_h = ImGui::GetTextLineHeight();
-  float row_h = (desc && desc[0]) ? (52.0f * font_scale) : (40.0f * font_scale);
-  if (row_h < line_h + 14.0f) row_h = line_h + 14.0f;
+  float card_h = 76.0f * font_scale;
 
   ImVec2 cursor_pos = ImGui::GetCursorScreenPos();
+  bool is_selected = (s_menu_cursor == index);
+
+  if (is_selected && s_cursor_just_moved) {
+    ImGui::SetScrollHereY(0.4f);
+  }
 
   ImGui::PushID(id);
-  ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-
-  bool row_clicked = ImGui::Selectable("##row", false, ImGuiSelectableFlags_AllowOverlap, ImVec2(row_w, row_h));
-  if (s_needs_focus_first) {
-    ImGui::SetItemDefaultFocus();
-    s_needs_focus_first = false;
-  }
-  bool is_focused = ImGui::IsItemFocused();
+  ImGui::InvisibleButton("##hitbox", ImVec2(card_w, card_h));
   bool is_hovered = ImGui::IsItemHovered();
-  ImGui::PopStyleColor(3);
+  bool is_clicked = ImGui::IsItemClicked();
+
+  if (is_hovered && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) {
+    s_menu_cursor = index;
+    is_selected = true;
+  }
+  if (is_clicked) {
+    s_menu_cursor = index;
+    is_selected = true;
+  }
 
   ImDrawList *draw_list = ImGui::GetWindowDrawList();
   ImVec2 min_p = cursor_pos;
-  ImVec2 max_p = ImVec2(cursor_pos.x + row_w, cursor_pos.y + row_h);
+  ImVec2 max_p = ImVec2(cursor_pos.x + card_w, cursor_pos.y + card_h);
 
-  if (is_focused) {
-    draw_list->AddRectFilled(min_p, max_p, danger ? IM_COL32(180, 50, 50, 55) : IM_COL32(199, 166, 56, 50), 6.0f);
-    draw_list->AddRect(min_p, max_p, danger ? IM_COL32(240, 70, 70, 230) : IM_COL32(250, 217, 64, 230), 6.0f, 0, 1.8f);
+  // Background and Border
+  if (is_selected) {
+    draw_list->AddRectFilled(min_p, max_p, is_danger ? IM_COL32(100, 30, 30, 240) : IM_COL32(30, 50, 38, 240), 7.0f);
+    draw_list->AddRect(min_p, max_p, is_danger ? IM_COL32(255, 90, 90, 255) : IM_COL32(250, 217, 64, 255), 7.0f, 0, 2.0f);
   } else if (is_hovered) {
-    draw_list->AddRectFilled(min_p, max_p, IM_COL32(35, 48, 40, 160), 6.0f);
-    draw_list->AddRect(min_p, max_p, IM_COL32(80, 110, 95, 140), 6.0f, 0, 1.0f);
+    draw_list->AddRectFilled(min_p, max_p, is_danger ? IM_COL32(70, 22, 22, 200) : IM_COL32(24, 36, 30, 200), 7.0f);
+    draw_list->AddRect(min_p, max_p, is_danger ? IM_COL32(200, 70, 70, 180) : IM_COL32(80, 115, 95, 180), 7.0f, 0, 1.2f);
   } else {
-    draw_list->AddRectFilled(min_p, max_p, IM_COL32(20, 26, 22, 130), 6.0f);
-    draw_list->AddRect(min_p, max_p, IM_COL32(50, 68, 58, 80), 6.0f, 0, 1.0f);
+    draw_list->AddRectFilled(min_p, max_p, is_danger ? IM_COL32(40, 18, 18, 170) : IM_COL32(18, 24, 20, 180), 7.0f);
+    draw_list->AddRect(min_p, max_p, is_danger ? IM_COL32(110, 40, 40, 120) : IM_COL32(45, 62, 52, 120), 7.0f, 0, 1.0f);
   }
 
-  float text_x = min_p.x + 16.0f;
-  float title_y = min_p.y + ((desc && desc[0]) ? 8.0f : ((row_h - line_h) * 0.5f));
+  // 1. Header Line: Title (left)
+  float text_x = min_p.x + 18.0f;
+  float title_y = min_p.y + 9.0f;
 
-  if (is_focused) {
-    draw_list->AddText(ImVec2(text_x, title_y), danger ? IM_COL32(255, 90, 90, 255) : IM_COL32(250, 217, 64, 255), ">");
-    text_x += 16.0f;
+  if (is_selected) {
+    draw_list->AddText(ImVec2(text_x, title_y), is_danger ? IM_COL32(255, 110, 110, 255) : IM_COL32(250, 217, 64, 255), ">");
+    text_x += 20.0f;
   }
 
-  ImU32 title_col = is_focused ? (danger ? IM_COL32(255, 120, 120, 255) : IM_COL32(255, 235, 110, 255))
-                               : IM_COL32(240, 242, 238, 255);
+  ImU32 title_col = is_selected ? (is_danger ? IM_COL32(255, 130, 130, 255) : IM_COL32(255, 235, 100, 255))
+                                : (is_danger ? IM_COL32(240, 160, 160, 255) : IM_COL32(240, 245, 240, 255));
   draw_list->AddText(ImVec2(text_x, title_y), title_col, title);
 
+  // Status Badge Pill on top-right
+  ImVec2 badge_sz = ImGui::CalcTextSize(btn_label);
+  float badge_w = badge_sz.x + 24.0f * font_scale;
+  float badge_h = 24.0f * font_scale;
+  float badge_x = max_p.x - badge_w - 16.0f;
+  float badge_y = min_p.y + 8.0f;
+
+  ImVec2 b_min = ImVec2(badge_x, badge_y);
+  ImVec2 b_max = ImVec2(badge_x + badge_w, badge_y + badge_h);
+  ImU32 b_bg = is_danger ? IM_COL32(180, 40, 40, 230) : IM_COL32(45, 110, 70, 220);
+  ImU32 b_border = is_danger ? IM_COL32(255, 90, 90, 240) : (is_selected ? IM_COL32(250, 217, 64, 240) : IM_COL32(70, 140, 95, 180));
+
+  draw_list->AddRectFilled(b_min, b_max, b_bg, 4.0f);
+  draw_list->AddRect(b_min, b_max, b_border, 4.0f, 0, 1.2f);
+  draw_list->AddText(ImVec2(b_min.x + (badge_w - badge_sz.x) * 0.5f, b_min.y + (badge_h - badge_sz.y) * 0.5f),
+                     IM_COL32(255, 255, 255, 255), btn_label);
+
+  // 2. Full-Width Description
+  float desc_y = title_y + line_h + 2.0f;
   if (desc && desc[0]) {
-    float desc_y = title_y + line_h + 3.0f;
-    draw_list->AddText(ImVec2(text_x, desc_y), IM_COL32(145, 170, 155, 255), desc);
+    draw_list->AddText(ImVec2(text_x, desc_y), IM_COL32(148, 175, 160, 255), desc);
   }
 
-  float btn_w = 175.0f * font_scale;
-  float btn_h = 32.0f * font_scale;
-  float btn_x = max_p.x - btn_w - 14.0f;
-  float btn_y = min_p.y + (row_h - btn_h) * 0.5f;
+  // 3. Wide Action Bar across card
+  float ctrl_y = desc_y + line_h + 5.0f;
+  float ctrl_h = 26.0f * font_scale;
+  ImVec2 bar_min = ImVec2(min_p.x + 16.0f, ctrl_y);
+  ImVec2 bar_max = ImVec2(max_p.x - 16.0f, ctrl_y + ctrl_h);
 
-  ImVec2 b_min = ImVec2(btn_x, btn_y);
-  ImVec2 b_max = ImVec2(btn_x + btn_w, btn_y + btn_h);
+  ImU32 bar_bg = is_danger ? (is_selected ? IM_COL32(190, 45, 45, 240) : IM_COL32(130, 32, 32, 210))
+                           : (is_selected ? IM_COL32(50, 115, 75, 240) : IM_COL32(28, 65, 42, 210));
+  ImU32 bar_border = is_danger ? IM_COL32(255, 90, 90, 230)
+                               : (is_selected ? IM_COL32(250, 217, 64, 255) : IM_COL32(65, 120, 85, 180));
 
-  ImU32 btn_bg = danger ? (is_focused ? IM_COL32(190, 40, 40, 240) : IM_COL32(130, 30, 30, 210))
-                        : (is_focused ? IM_COL32(55, 115, 75, 240) : IM_COL32(32, 65, 45, 210));
-  ImU32 btn_border = danger ? IM_COL32(240, 80, 80, 220)
-                            : (is_focused ? IM_COL32(250, 217, 64, 255) : IM_COL32(75, 130, 95, 180));
+  draw_list->AddRectFilled(bar_min, bar_max, bar_bg, 5.0f);
+  draw_list->AddRect(bar_min, bar_max, bar_border, 5.0f, 0, is_selected ? 1.5f : 1.0f);
 
-  draw_list->AddRectFilled(b_min, b_max, btn_bg, 5.0f);
-  draw_list->AddRect(b_min, b_max, btn_border, 5.0f, 0, is_focused ? 2.0f : 1.5f);
+  char act_str[128];
+  snprintf(act_str, sizeof(act_str), "%s  (Pressione Botao A)", btn_label);
+  ImVec2 asz = ImGui::CalcTextSize(act_str);
+  draw_list->AddText(ImVec2(bar_min.x + (bar_max.x - bar_min.x - asz.x) * 0.5f, bar_min.y + (ctrl_h - asz.y) * 0.5f),
+                     IM_COL32(255, 255, 255, 255), act_str);
 
-  ImVec2 bs = ImGui::CalcTextSize(button_label);
-  float bx = b_min.x + (btn_w - bs.x) * 0.5f;
-  float by = b_min.y + (btn_h - bs.y) * 0.5f;
-  draw_list->AddText(ImVec2(bx, by), IM_COL32(255, 255, 255, 255), button_label);
-
-  bool triggered = false;
-  if (is_focused) {
-    if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown) ||
-        ImGui::IsKeyPressed(ImGuiKey_Enter) ||
-        ImGui::IsKeyPressed(ImGuiKey_Space)) {
-      triggered = true;
-    }
-  }
-
-  if (row_clicked) {
-    triggered = true;
-  }
+  bool triggered = (is_selected && s_nav.confirm) || is_clicked;
 
   ImGui::PopID();
   return triggered;
+}
+
+// Card de Informação Estática (Sobre o projeto, recursos, etc.)
+static void Card_Info(
+    int index,
+    const char *id,
+    const char *title,
+    const char *desc,
+    const char *badge_label)
+{
+  ImGuiIO& io = ImGui::GetIO();
+  float card_w = ImGui::GetContentRegionAvail().x;
+  if (card_w < 100.0f) card_w = 400.0f;
+  float font_scale = io.FontGlobalScale;
+  float line_h = ImGui::GetTextLineHeight();
+  float card_h = 58.0f * font_scale;
+
+  ImVec2 cursor_pos = ImGui::GetCursorScreenPos();
+  bool is_selected = (s_menu_cursor == index);
+
+  if (is_selected && s_cursor_just_moved) {
+    ImGui::SetScrollHereY(0.4f);
+  }
+
+  ImGui::PushID(id);
+  ImGui::InvisibleButton("##hitbox", ImVec2(card_w, card_h));
+  bool is_hovered = ImGui::IsItemHovered();
+  bool is_clicked = ImGui::IsItemClicked();
+
+  if (is_hovered && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f)) {
+    s_menu_cursor = index;
+    is_selected = true;
+  }
+  if (is_clicked) {
+    s_menu_cursor = index;
+    is_selected = true;
+  }
+
+  ImDrawList *draw_list = ImGui::GetWindowDrawList();
+  ImVec2 min_p = cursor_pos;
+  ImVec2 max_p = ImVec2(cursor_pos.x + card_w, cursor_pos.y + card_h);
+
+  // Background and Border
+  if (is_selected) {
+    draw_list->AddRectFilled(min_p, max_p, IM_COL32(30, 50, 38, 240), 7.0f);
+    draw_list->AddRect(min_p, max_p, IM_COL32(250, 217, 64, 255), 7.0f, 0, 2.0f);
+  } else if (is_hovered) {
+    draw_list->AddRectFilled(min_p, max_p, IM_COL32(24, 36, 30, 200), 7.0f);
+    draw_list->AddRect(min_p, max_p, IM_COL32(80, 115, 95, 180), 7.0f, 0, 1.2f);
+  } else {
+    draw_list->AddRectFilled(min_p, max_p, IM_COL32(18, 24, 20, 180), 7.0f);
+    draw_list->AddRect(min_p, max_p, IM_COL32(45, 62, 52, 120), 7.0f, 0, 1.0f);
+  }
+
+  // 1. Header Line: Title (left)
+  float text_x = min_p.x + 18.0f;
+  float title_y = min_p.y + 9.0f;
+
+  if (is_selected) {
+    draw_list->AddText(ImVec2(text_x, title_y), IM_COL32(250, 217, 64, 255), ">");
+    text_x += 20.0f;
+  }
+
+  ImU32 title_col = is_selected ? IM_COL32(255, 235, 100, 255) : IM_COL32(240, 245, 240, 255);
+  draw_list->AddText(ImVec2(text_x, title_y), title_col, title);
+
+  // Right Badge Pill
+  if (badge_label && badge_label[0]) {
+    ImVec2 badge_sz = ImGui::CalcTextSize(badge_label);
+    float badge_w = badge_sz.x + 24.0f * font_scale;
+    float badge_h = 24.0f * font_scale;
+    float badge_x = max_p.x - badge_w - 16.0f;
+    float badge_y = min_p.y + (card_h - badge_h) * 0.5f;
+
+    ImVec2 b_min = ImVec2(badge_x, badge_y);
+    ImVec2 b_max = ImVec2(badge_x + badge_w, badge_y + badge_h);
+    draw_list->AddRectFilled(b_min, b_max, IM_COL32(30, 75, 50, 200), 4.0f);
+    draw_list->AddRect(b_min, b_max, is_selected ? IM_COL32(250, 217, 64, 220) : IM_COL32(65, 110, 85, 160), 4.0f, 0, 1.2f);
+    draw_list->AddText(ImVec2(b_min.x + (badge_w - badge_sz.x) * 0.5f, b_min.y + (badge_h - badge_sz.y) * 0.5f),
+                       is_selected ? IM_COL32(255, 235, 120, 255) : IM_COL32(200, 230, 210, 255), badge_label);
+  }
+
+  // 2. Full-Width Description
+  float desc_y = title_y + line_h + 2.0f;
+  if (desc && desc[0]) {
+    draw_list->AddText(ImVec2(text_x, desc_y), IM_COL32(148, 175, 160, 255), desc);
+  }
+
+  ImGui::PopID();
 }
 
 // =============================================================================
@@ -965,16 +1226,23 @@ static void RenderOverlayWindow() {
   ImGuiIO& io = ImGui::GetIO();
   ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-  // Tratamento global do botão B ou Tecla ESC para voltar ou fechar
-  if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+  // Leitura de entradas unificadas (D-Pad, Analog Stick, Teclado)
+  s_nav = ReadNavInputs();
+
+  // Atalho Start para fechar rapidamente o menu e voltar ao jogo
+  if (ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)) {
+    Overlay_Toggle();
+    return;
+  }
+
+  // Botão B ou Tecla ESC para voltar ao Menu Principal ou fechar
+  if (s_nav.cancel) {
     if (s_current_screen == kScreen_MainMenu) {
       Overlay_Toggle();
       return;
     } else {
-      // Retorna para o Menu Principal
-      s_current_screen = kScreen_MainMenu;
-      s_needs_focus_first = true;
-      SyncStagedSettingsFromActive();
+      ReturnToMainMenu();
+      return;
     }
   }
 
@@ -1009,15 +1277,15 @@ static void RenderOverlayWindow() {
     if (s_current_screen == kScreen_MainMenu) {
       ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.60f, 1.0f), "|   MENU PRINCIPAL");
     } else if (s_current_screen == kScreen_Video) {
-      ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.60f, 1.0f), "|   CONFIGURAÇÕES DE VÍDEO & GRÁFICOS");
+      ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.60f, 1.0f), "|   CONFIGURACOES DE VIDEO & GRAFICOS");
     } else if (s_current_screen == kScreen_Audio) {
-      ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.60f, 1.0f), "|   CONFIGURAÇÕES DE ÁUDIO & MSU-1");
+      ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.60f, 1.0f), "|   CONFIGURACOES DE AUDIO & MSU-1");
     } else if (s_current_screen == kScreen_Language) {
-      ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.60f, 1.0f), "|   SELEÇÃO DE IDIOMA / LANGUAGE");
+      ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.60f, 1.0f), "|   SELECAO DE IDIOMA / LANGUAGE");
     } else if (s_current_screen == kScreen_Gameplay) {
       ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.60f, 1.0f), "|   MELHORIAS DE JOGABILIDADE (QOL)");
     } else if (s_current_screen == kScreen_Cheats) {
-      ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.60f, 1.0f), "|   TRAPAÇAS & ESTADOS DE JOGO (SAVES)");
+      ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.60f, 1.0f), "|   TRAPACAS & ESTADOS DE JOGO (SAVES)");
     } else if (s_current_screen == kScreen_About) {
       ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.60f, 1.0f), "|   SOBRE O PROJETO & CONTROLES");
     } else if (s_current_screen == kScreen_ExitConfirm) {
@@ -1036,79 +1304,63 @@ static void RenderOverlayWindow() {
     if (ImGui::BeginChild("MenuScrollableBody", ImVec2(0, content_h), false, ImGuiWindowFlags_None)) {
 
       // =======================================================================
-      // TELA 0: MENU PRINCIPAL (LISTA VERTICAL DE CATEGORIAS)
+      // TELA 0: MENU PRINCIPAL (LISTA VERTICAL DE CATEGORIAS - 7 ITENS)
       // =======================================================================
       if (s_current_screen == kScreen_MainMenu) {
+        UpdateMenuNavigation(7);
+
         ImGui::TextColored(ImVec4(0.70f, 0.75f, 0.72f, 1.0f), "Selecione uma categoria para configurar:");
         ImGui::Spacing();
 
-        if (MenuRow_MainMenuItem("menu_video", "VÍDEO & GRÁFICOS", "Resolução, tela cheia, proporção de tela, Modo 7 e filtros visuais")) {
-          s_current_screen = kScreen_Video;
-          s_needs_focus_first = true;
-          SyncStagedSettingsFromActive();
+        if (Card_MainMenu(0, "menu_video", "VIDEO & GRAFICOS", "Resolucao, tela cheia, proporcao de tela, Modo 7 e filtros visuais")) {
+          SetScreen(kScreen_Video);
         }
         ImGui::Spacing();
 
-        if (MenuRow_MainMenuItem("menu_audio", "ÁUDIO & MSU-1", "Volume geral, efeitos sonoros e trilhas orquestradas em alta fidelidade")) {
-          s_current_screen = kScreen_Audio;
-          s_needs_focus_first = true;
-          SyncStagedSettingsFromActive();
+        if (Card_MainMenu(1, "menu_audio", "AUDIO & MSU-1", "Volume geral, efeitos sonoros e trilhas orquestradas em alta fidelidade")) {
+          SetScreen(kScreen_Audio);
         }
         ImGui::Spacing();
 
-        if (MenuRow_MainMenuItem("menu_lang", "IDIOMA & TEXTOS", "Seleção de tradução (Português PT-BR, Inglês, etc.) e recursos de fontes")) {
-          s_current_screen = kScreen_Language;
-          s_needs_focus_first = true;
-          SyncStagedSettingsFromActive();
+        if (Card_MainMenu(2, "menu_lang", "IDIOMA & TEXTOS", "Selecao de traducao (Portugues PT-BR, Ingles, etc.) e recursos de fontes")) {
+          SetScreen(kScreen_Language);
         }
         ImGui::Spacing();
 
-        if (MenuRow_MainMenuItem("menu_gameplay", "JOGABILIDADE (QoL)", "Aceleração de diálogos, troca rápida L/R e melhorias de conveniência")) {
-          s_current_screen = kScreen_Gameplay;
-          s_needs_focus_first = true;
-          SyncStagedSettingsFromActive();
+        if (Card_MainMenu(3, "menu_gameplay", "JOGABILIDADE (QoL)", "Aceleracao de dialogos, troca rapida L/R e melhorias de conveniencia")) {
+          SetScreen(kScreen_Gameplay);
         }
         ImGui::Spacing();
 
-        if (MenuRow_MainMenuItem("menu_cheats", "TRAPAÇAS & SAVE STATES", "Ações rápidas de itens/vida e salvamento em 10 slots de memória")) {
-          s_current_screen = kScreen_Cheats;
-          s_needs_focus_first = true;
-          SyncStagedSettingsFromActive();
+        if (Card_MainMenu(4, "menu_cheats", "TRAPACAS & SAVE STATES", "Acoes rapidas de itens/vida e salvamento em 10 slots de memoria")) {
+          SetScreen(kScreen_Cheats);
         }
         ImGui::Spacing();
 
-        if (MenuRow_MainMenuItem("menu_about", "SOBRE O PROJETO", "Guia completo de controles do menu, histórico e créditos do projeto")) {
-          s_current_screen = kScreen_About;
-          s_needs_focus_first = true;
+        if (Card_MainMenu(5, "menu_about", "SOBRE O PROJETO", "Guia completo de controles do menu, historico e creditos do projeto")) {
+          SetScreen(kScreen_About);
         }
         ImGui::Spacing();
 
-        if (MenuRow_MainMenuItem("menu_exit", "SAIR DO JOGO", "Salvar configurações e fechar o jogo para a Área de Trabalho", true)) {
-          s_current_screen = kScreen_ExitConfirm;
-          s_needs_focus_first = true;
+        if (Card_MainMenu(6, "menu_exit", "SAIR DO JOGO", "Salvar configuracoes e fechar o jogo para a Area de Trabalho", true)) {
+          SetScreen(kScreen_ExitConfirm);
         }
       }
 
       // =======================================================================
-      // TELA 1: VÍDEO & GRÁFICOS
+      // TELA 1: VÍDEO & GRÁFICOS (13 ITENS)
       // =======================================================================
       else if (s_current_screen == kScreen_Video) {
-        if (MenuRow_Button("btn_back_video", "◄ VOLTAR AO MENU PRINCIPAL", "Retorna para a lista de categorias do menu", "VOLTAR (B)")) {
-          s_current_screen = kScreen_MainMenu;
-          s_needs_focus_first = true;
-          SyncStagedSettingsFromActive();
-        }
-        ImGui::Spacing();
+        UpdateMenuNavigation(13);
 
-        MenuSection_Header("EXIBIÇÃO & RESOLUÇÃO");
+        CardSection_Header("EXIBICAO & RESOLUCAO");
 
-        // 1. Resolução com Staging
+        // 0. Resolução com Staging
         const char *res_names[IM_ARRAYSIZE(kStandardResolutions)];
         for (size_t i = 0; i < IM_ARRAYSIZE(kStandardResolutions); i++) {
           res_names[i] = kStandardResolutions[i].name;
         }
 
-        // Obtém resolução atual real para comparação
         int cur_w = g_config.window_width;
         int cur_h = g_config.window_height;
         if (cur_w == 0 || cur_h == 0) {
@@ -1126,45 +1378,48 @@ static void RenderOverlayWindow() {
         if (active_res_idx < 0) active_res_idx = 7;
 
         bool res_applied = false;
-        if (MenuRow_StagedStepper("row_res", "Resolução da Tela", "Ajusta as dimensões da janela ou resolução física", &s_staged.res_idx, active_res_idx, res_names, IM_ARRAYSIZE(res_names), &res_applied)) {
+        if (Card_StagedStepper(0, "row_res", "Resolucao da Tela", "Ajusta as dimensoes da janela ou resolucao fisica do monitor", &s_staged.res_idx, active_res_idx, res_names, IM_ARRAYSIZE(res_names), &res_applied)) {
           SetWindowResolution(kStandardResolutions[s_staged.res_idx].width, kStandardResolutions[s_staged.res_idx].height);
           SaveConfigFile(NULL);
           char buf[128];
-          snprintf(buf, sizeof(buf), "Resolução aplicada: %dx%d!", kStandardResolutions[s_staged.res_idx].width, kStandardResolutions[s_staged.res_idx].height);
+          snprintf(buf, sizeof(buf), "Resolucao aplicada: %dx%d!", kStandardResolutions[s_staged.res_idx].width, kStandardResolutions[s_staged.res_idx].height);
           SetStatus(buf);
         }
+        ImGui::Spacing();
 
-        // 2. Modo de Tela com Staging
+        // 1. Modo de Tela com Staging
         const char *fs_names[] = {
           "Janela (Windowed)",
           "Tela Cheia sem Bordas (Borderless)",
-          "Tela Cheia Exclusiva (Fullscreen)"
+          "Tela Cheia Exclusiva (Fullscreen Direct)"
         };
         bool fs_applied = false;
-        if (MenuRow_StagedStepper("row_fs", "Modo de Exibição", "Alterna entre janela normal e tela cheia", &s_staged.fs_mode, g_config.fullscreen, fs_names, IM_ARRAYSIZE(fs_names), &fs_applied)) {
+        if (Card_StagedStepper(1, "row_fs", "Modo de Exibicao", "Alterna entre janela normal e tela cheia", &s_staged.fs_mode, g_config.fullscreen, fs_names, IM_ARRAYSIZE(fs_names), &fs_applied)) {
           g_config.fullscreen = (uint8)s_staged.fs_mode;
           SetFullscreenMode(s_staged.fs_mode);
           SaveConfigFile(NULL);
           SetStatus("Modo de tela aplicado!");
         }
+        ImGui::Spacing();
 
-        // 3. Escala com Staging
-        const char *scale_names[] = { "1x (SNES Nativo)", "2x", "3x (Padrão)", "4x", "5x", "6x", "7x", "8x", "9x", "10x (Ultra)" };
+        // 2. Escala com Staging
+        const char *scale_names[] = { "1x (SNES Nativo)", "2x", "3x (Padrao)", "4x", "5x", "6x", "7x", "8x", "9x", "10x (Ultra)" };
         int active_scale = (g_config.window_scale >= 1 && g_config.window_scale <= 10) ? (g_config.window_scale - 1) : 2;
         bool scale_applied = false;
-        if (MenuRow_StagedStepper("row_scale", "Escala da Janela", "Multiplicador de tamanho dos pixels originais", &s_staged.scale, active_scale, scale_names, IM_ARRAYSIZE(scale_names), &scale_applied)) {
+        if (Card_StagedStepper(2, "row_scale", "Escala da Janela", "Multiplicador de tamanho dos pixels originais", &s_staged.scale, active_scale, scale_names, IM_ARRAYSIZE(scale_names), &scale_applied)) {
           SetWindowScale(s_staged.scale + 1);
           SaveConfigFile(NULL);
           SetStatus("Escala aplicada!");
         }
+        ImGui::Spacing();
 
-        MenuSection_Header("PROPORÇÃO DE TELA & WIDESCREEN");
+        CardSection_Header("PROPORCAO DE TELA & WIDESCREEN");
 
-        // 4. Proporção com Staging
+        // 3. Proporção com Staging
         const char *ar_names[] = {
-          "Auto (Ajustar à Janela / Livre)",
+          "Auto (Ajustar a Janela / Livre)",
           "4:3 (Original SNES)",
-          "16:9 (Widescreen Padrão)",
+          "16:9 (Widescreen Padrao)",
           "16:10 (Handhelds / Telas 16:10)",
           "18:9 (Smartphones / 2:1)",
           "21:9 (Monitores Ultrawide)",
@@ -1173,99 +1428,121 @@ static void RenderOverlayWindow() {
         int active_ar = GetAspectRatioIndex();
         if (active_ar < 0) active_ar = 0;
         bool ar_applied = false;
-        if (MenuRow_StagedStepper("row_ar", "Proporção de Tela (Aspect Ratio)", "Expansão de visão horizontal sem esticar personagens", &s_staged.aspect_ratio, active_ar, ar_names, IM_ARRAYSIZE(ar_names), &ar_applied)) {
+        if (Card_StagedStepper(3, "row_ar", "Proporcao de Tela (Aspect Ratio)", "Expansao de visao horizontal sem esticar personagens", &s_staged.aspect_ratio, active_ar, ar_names, IM_ARRAYSIZE(ar_names), &ar_applied)) {
           SetAspectRatio(s_staged.aspect_ratio);
           SaveConfigFile(NULL);
-          SetStatus("Proporção de tela aplicada!");
+          SetStatus("Proporcao de tela aplicada!");
         }
+        ImGui::Spacing();
 
+        // 4. Áreas Adjacentes
         bool ext_adj = g_config.extend_adjacent_areas;
-        if (MenuRow_Toggle("row_ext_adj", "Carregar Áreas Adjacentes no Limite", "Elimina barras pretas ao aproximar da borda do mapa em Widescreen", &ext_adj)) {
+        if (Card_Toggle(4, "row_ext_adj", "Carregar Areas Adjacentes no Limite", "Elimina barras pretas ao aproximar da borda do mapa em Widescreen", &ext_adj)) {
           g_config.extend_adjacent_areas = ext_adj;
           SaveConfigFile(NULL);
-          SetStatus("Áreas adjacentes atualizadas!");
+          SetStatus("Areas adjacentes atualizadas!");
         }
+        ImGui::Spacing();
 
-        MenuSection_Header("GRÁFICOS & FIDELIDADE PPU");
+        CardSection_Header("GRAFICOS & FIDELIDADE PPU");
 
+        // 5. Novo Renderizador PPU
         bool new_ppu = g_config.new_renderer;
-        if (MenuRow_Toggle("row_ppu", "Renderizador PPU Otimizado", "Processador de imagem multithreaded moderno e veloz", &new_ppu)) {
+        if (Card_Toggle(5, "row_ppu", "Renderizador PPU Otimizado", "Processador de imagem multithreaded moderno e veloz", &new_ppu)) {
           g_config.new_renderer = new_ppu;
           SaveConfigFile(NULL);
         }
+        ImGui::Spacing();
 
+        // 6. Modo 7 Aprimorado
         bool mode7 = g_config.enhanced_mode7;
-        if (MenuRow_Toggle("row_mode7", "Modo 7 Aprimorado em Alta Resolução", "Renderiza o mapa geral e rotações 3D com clareza máxima", &mode7)) {
+        if (Card_Toggle(6, "row_mode7", "Modo 7 Aprimorado em Alta Resolucao", "Renderiza o mapa geral e rotacoes 3D com clareza maxima", &mode7)) {
           g_config.enhanced_mode7 = mode7;
           SaveConfigFile(NULL);
         }
+        ImGui::Spacing();
 
+        // 7. Limite de Sprites
         bool no_spr_lim = g_config.no_sprite_limits;
-        if (MenuRow_Toggle("row_spr_lim", "Remover Limite de Sprites", "Elimina o piscar (flickering) quando há muitos monstros na tela", &no_spr_lim)) {
+        if (Card_Toggle(7, "row_spr_lim", "Remover Limite de Sprites", "Elimina o piscar (flickering) quando ha muitos monstros na tela", &no_spr_lim)) {
           g_config.no_sprite_limits = no_spr_lim;
           SaveConfigFile(NULL);
         }
+        ImGui::Spacing();
 
+        // 8. Filtro Linear
         bool lin_filt = g_config.linear_filtering;
-        if (MenuRow_Toggle("row_lin_filt", "Filtro Linear (Bilinear Filtering)", "Suaviza as bordas dos pixels na tela para uma imagem mais macia", &lin_filt)) {
+        if (Card_Toggle(8, "row_lin_filt", "Filtro Linear (Bilinear Filtering)", "Suaviza as bordas dos pixels na tela para uma imagem mais macia", &lin_filt)) {
           g_config.linear_filtering = lin_filt;
           SaveConfigFile(NULL);
         }
+        ImGui::Spacing();
 
-        MenuSection_Header("DESEMPENHO & ACESSIBILIDADE");
+        CardSection_Header("DESEMPENHO & ACESSIBILIDADE");
 
+        // 9. Limitar 60 FPS
         bool limit_60 = !g_config.disable_frame_delay;
-        if (MenuRow_Toggle("row_lim60", "Limitar em 60 FPS", "Mantém a velocidade e o timing da física original do console", &limit_60)) {
+        if (Card_Toggle(9, "row_lim60", "Limitar em 60 FPS", "Mantem a velocidade e o timing da fisica original do console", &limit_60)) {
           g_config.disable_frame_delay = !limit_60;
           SaveConfigFile(NULL);
         }
+        ImGui::Spacing();
 
+        // 10. FPS HUD
         bool fps_hud = g_config.display_fps;
-        if (MenuRow_Toggle("row_fps_hud", "Exibir Contador de FPS na Tela (HUD)", "Mostra a taxa real de quadros no canto superior direito", &fps_hud)) {
+        if (Card_Toggle(10, "row_fps_hud", "Exibir Contador de FPS na Tela (HUD)", "Mostra a taxa real de quadros no canto superior direito", &fps_hud)) {
           g_config.display_fps = fps_hud;
           SaveConfigFile(NULL);
         }
+        ImGui::Spacing();
 
+        // 11. Flashes de Luz
         bool dim_flash = (g_config.features0 & kFeatures0_DimFlashes) != 0;
-        if (MenuRow_Toggle("row_dim_flash", "Diminuir Flashes de Luz", "Atenua relâmpagos e clarões (proteção para fotossensibilidade)", &dim_flash)) {
+        if (Card_Toggle(11, "row_dim_flash", "Diminuir Flashes de Luz", "Atenua relampagos e claroes (protecao para fotossensibilidade)", &dim_flash)) {
           if (dim_flash) g_config.features0 |= kFeatures0_DimFlashes;
           else g_config.features0 &= ~kFeatures0_DimFlashes;
           SaveConfigFile(NULL);
         }
+        ImGui::Spacing();
+
+        // 12. Botão Voltar
+        if (Card_Button(12, "btn_back_video", "< VOLTAR AO MENU PRINCIPAL", "Retorna para a lista de categorias do menu principal", "VOLTAR (B)")) {
+          ReturnToMainMenu();
+        }
       }
 
       // =======================================================================
-      // TELA 2: ÁUDIO & MSU-1
+      // TELA 2: ÁUDIO & MSU-1 (6 ITENS)
       // =======================================================================
       else if (s_current_screen == kScreen_Audio) {
-        if (MenuRow_Button("btn_back_audio", "◄ VOLTAR AO MENU PRINCIPAL", "Retorna para a lista de categorias do menu", "VOLTAR (B)")) {
-          s_current_screen = kScreen_MainMenu;
-          s_needs_focus_first = true;
-          SyncStagedSettingsFromActive();
-        }
-        ImGui::Spacing();
+        UpdateMenuNavigation(6);
 
-        MenuSection_Header("ÁUDIO GLOBAL (MASTER)");
+        CardSection_Header("AUDIO GLOBAL (MASTER)");
 
+        // 0. Áudio Ativado
         bool audio_en = g_config.enable_audio;
-        if (MenuRow_Toggle("row_audio_en", "Áudio do Jogo Ativado", "Habilita ou muta completamente todos os efeitos sonoros e músicas", &audio_en)) {
+        if (Card_Toggle(0, "row_audio_en", "Audio do Jogo Ativado", "Habilita ou muta completamente todos os efeitos sonoros e musicas", &audio_en)) {
           g_config.enable_audio = audio_en;
           SaveConfigFile(NULL);
         }
+        ImGui::Spacing();
 
+        // 1. Volume Geral
         int master_vol = GetMasterVolume();
-        if (MenuRow_Slider("row_master_vol", "Volume Geral (Master)", "Volume sonoro global das músicas e efeitos do jogo", &master_vol, 0, 100, 5, "%")) {
+        if (Card_Slider(1, "row_master_vol", "Volume Geral (Master)", "Volume sonoro global das musicas e efeitos do jogo", &master_vol, 0, 100, 5, "%")) {
           SetMasterVolume(master_vol);
           SaveConfigFile(NULL);
         }
+        ImGui::Spacing();
 
-        MenuSection_Header("TRILHAS ORQUESTRADAS MSU-1");
+        CardSection_Header("TRILHAS ORQUESTRADAS MSU-1");
 
+        // 2. Modo MSU-1
         const char *msu_names[] = {
           "Desativado (Original SNES)",
-          "MSU-1 Padrão (Orquestra em CD)",
+          "MSU-1 Padrao (Orquestra em CD)",
           "MSU-1 Deluxe",
-          "Opuz (Áudio Comprimido)",
+          "Opuz (Audio Comprimido)",
           "Deluxe + Opuz"
         };
         int active_msu = 0;
@@ -1275,7 +1552,7 @@ static void RenderOverlayWindow() {
         else if (g_config.enable_msu == (kMsuEnabled_MsuDeluxe | kMsuEnabled_Opuz)) active_msu = 4;
 
         bool msu_applied = false;
-        if (MenuRow_StagedStepper("row_msu_mode", "Modo de Áudio MSU-1", "Substitui os sintetizadores por orquestra real em alta fidelidade", &s_staged.msu_mode, active_msu, msu_names, IM_ARRAYSIZE(msu_names), &msu_applied)) {
+        if (Card_StagedStepper(2, "row_msu_mode", "Modo de Audio MSU-1", "Substitui os sintetizadores por orquestra real em alta fidelidade", &s_staged.msu_mode, active_msu, msu_names, IM_ARRAYSIZE(msu_names), &msu_applied)) {
           if (s_staged.msu_mode == 0) g_config.enable_msu = 0;
           else if (s_staged.msu_mode == 1) g_config.enable_msu = kMsuEnabled_Msu;
           else if (s_staged.msu_mode == 2) g_config.enable_msu = kMsuEnabled_MsuDeluxe;
@@ -1285,33 +1562,39 @@ static void RenderOverlayWindow() {
           SaveConfigFile(NULL);
           SetStatus("Modo MSU-1 aplicado!");
         }
+        ImGui::Spacing();
 
+        // 3. Volume MSU-1
         int msu_vol = g_config.msuvolume;
-        if (MenuRow_Slider("row_msu_vol", "Volume das Músicas MSU-1", "Equilíbrio sonoro individual das faixas orquestradas", &msu_vol, 0, 100, 5, "%")) {
+        if (Card_Slider(3, "row_msu_vol", "Volume das Musicas MSU-1", "Equilibrio sonoro individual das faixas orquestradas", &msu_vol, 0, 100, 5, "%")) {
           g_config.msuvolume = (uint8)msu_vol;
           SaveConfigFile(NULL);
         }
+        ImGui::Spacing();
 
+        // 4. Continuar Faixa
         bool resume_msu = g_config.resume_msu;
-        if (MenuRow_Toggle("row_resume_msu", "Continuar Faixa ao Retornar", "Retoma a música de onde parou ao voltar para a mesma área", &resume_msu)) {
+        if (Card_Toggle(4, "row_resume_msu", "Continuar Faixa ao Retornar", "Retoma a musica de onde parou ao voltar para a mesma area", &resume_msu)) {
           g_config.resume_msu = resume_msu;
           SaveConfigFile(NULL);
+        }
+        ImGui::Spacing();
+
+        // 5. Botão Voltar
+        if (Card_Button(5, "btn_back_audio", "< VOLTAR AO MENU PRINCIPAL", "Retorna para a lista de categorias do menu principal", "VOLTAR (B)")) {
+          ReturnToMainMenu();
         }
       }
 
       // =======================================================================
-      // TELA 3: IDIOMA / LANGUAGE
+      // TELA 3: IDIOMA / LANGUAGE (5 ITENS)
       // =======================================================================
       else if (s_current_screen == kScreen_Language) {
-        if (MenuRow_Button("btn_back_lang", "◄ VOLTAR AO MENU PRINCIPAL", "Retorna para a lista de categorias do menu", "VOLTAR (B)")) {
-          s_current_screen = kScreen_MainMenu;
-          s_needs_focus_first = true;
-          SyncStagedSettingsFromActive();
-        }
-        ImGui::Spacing();
+        UpdateMenuNavigation(5);
 
-        MenuSection_Header("SELEÇÃO DE IDIOMA");
+        CardSection_Header("SELECAO DE IDIOMA");
 
+        // 0. Idioma
         int active_lang = 0;
         if (g_config.language) {
           for (int i = 0; i < (int)IM_ARRAYSIZE(kLangCodes); i++) {
@@ -1323,181 +1606,214 @@ static void RenderOverlayWindow() {
         }
 
         bool lang_applied = false;
-        if (MenuRow_StagedStepper("row_lang", "Idioma do Jogo", "Tradução de textos, nomes de itens e menus em tempo real", &s_staged.lang_idx, active_lang, kLangNames, IM_ARRAYSIZE(kLangNames), &lang_applied)) {
+        if (Card_StagedStepper(0, "row_lang", "Idioma do Jogo", "Traducao de textos, nomes de itens e menus em tempo real", &s_staged.lang_idx, active_lang, kLangNames, IM_ARRAYSIZE(kLangNames), &lang_applied)) {
           g_config.language = kLangCodes[s_staged.lang_idx];
           ZeldaSetLanguage(g_config.language);
           SaveConfigFile(NULL);
           SetStatus("Idioma aplicado com sucesso!");
         }
+        ImGui::Spacing();
 
-        MenuSection_Header("RECURSOS DE TRADUÇÃO");
-        MenuRow_Button("info_ptbr_font", "Suporte a Caracteres Acentuados", "Acentuação gráfica completa (ç, ã, õ, á, é, í, ó, ú, â, ê)", "ATIVO");
-        MenuRow_Button("info_ptbr_text", "Diálogos Nativos em Português", "Textos extraídos e adaptados diretamente da versão brasileira", "INCLUSO");
-        MenuRow_Button("info_ptbr_save", "Persistência Automática", "Sua preferência de idioma é mantida no arquivo zelda3.ini", "GRAVADO");
+        CardSection_Header("RECURSOS DE TRADUCAO");
+        Card_Info(1, "info_ptbr_font", "Suporte a Caracteres Acentuados", "Acentuacao grafica completa (c, a, o, a, e, i, o, u, a, e)", "ATIVO");
+        ImGui::Spacing();
+        Card_Info(2, "info_ptbr_text", "Dialogos Nativos em Portugues", "Textos extraidos e adaptados diretamente da versao brasileira", "INCLUSO");
+        ImGui::Spacing();
+        Card_Info(3, "info_ptbr_save", "Persistencia Automatica", "Sua preferencia de idioma e mantida no arquivo zelda3.ini", "GRAVADO");
+        ImGui::Spacing();
+
+        // 4. Botão Voltar
+        if (Card_Button(4, "btn_back_lang", "< VOLTAR AO MENU PRINCIPAL", "Retorna para a lista de categorias do menu principal", "VOLTAR (B)")) {
+          ReturnToMainMenu();
+        }
       }
 
       // =======================================================================
-      // TELA 4: JOGABILIDADE (QOL)
+      // TELA 4: JOGABILIDADE - QOL (16 ITENS)
       // =======================================================================
       else if (s_current_screen == kScreen_Gameplay) {
-        if (MenuRow_Button("btn_back_qol", "◄ VOLTAR AO MENU PRINCIPAL", "Retorna para a lista de categorias do menu", "VOLTAR (B)")) {
-          s_current_screen = kScreen_MainMenu;
-          s_needs_focus_first = true;
-          SyncStagedSettingsFromActive();
+        UpdateMenuNavigation(16);
+
+        CardSection_Header("DIALOGOS & TEXTOS");
+
+        // 0. Aceleração de Diálogos
+        const char *fast_diag_modes[] = {
+          "Desativado (Original SNES)",
+          "Ao Segurar Botao (A/B/X/Y) [Recomendado]",
+          "Sempre Rapido"
+        };
+        bool fd_applied = false;
+        if (Card_StagedStepper(0, "row_fast_diag", "Aceleracao de Dialogos", "Acelera a digitacao ate o final da caixa no estilo dos Zeldas modernos", &s_staged.fast_diag, g_config.fast_dialogue, fast_diag_modes, IM_ARRAYSIZE(fast_diag_modes), &fd_applied)) {
+          g_config.fast_dialogue = (uint8)s_staged.fast_diag;
+          SaveConfigFile(NULL);
+          SetStatus("Modo de dialogo aplicado!");
         }
         ImGui::Spacing();
 
-        MenuSection_Header("DIÁLOGOS & TEXTOS");
-
-        const char *fast_diag_modes[] = {
-          "Desativado (Original SNES)",
-          "Ao Segurar Botão (A/B/X/Y) [Recomendado]",
-          "Sempre Rápido"
+        // 1. Velocidade da Aceleração
+        const char *speed_labels[] = {
+          "1: Suave (2x)",
+          "2: Rapida (4x)",
+          "3: Muito Rapida (8x - Padrao)",
+          "4: Ultrarrapida (16x)",
+          "5: Instantanea (Maxima)"
         };
-        bool fd_applied = false;
-        if (MenuRow_StagedStepper("row_fast_diag", "Aceleração de Diálogos", "Acelera a digitação até o final da caixa no estilo dos Zeldas modernos", &s_staged.fast_diag, g_config.fast_dialogue, fast_diag_modes, IM_ARRAYSIZE(fast_diag_modes), &fd_applied)) {
-          g_config.fast_dialogue = (uint8)s_staged.fast_diag;
+        int active_spd = g_config.fast_dialogue_speed ? (g_config.fast_dialogue_speed - 1) : 2;
+        if (active_spd < 0) active_spd = 0;
+        if (active_spd > 4) active_spd = 4;
+        bool spd_applied = false;
+        if (Card_StagedStepper(1, "row_fast_speed", "Velocidade da Aceleracao", "Rapidez com que as letras preenchem a caixa de mensagem", &s_staged.fast_diag_speed, active_spd, speed_labels, IM_ARRAYSIZE(speed_labels), &spd_applied)) {
+          g_config.fast_dialogue_speed = (uint8)(s_staged.fast_diag_speed + 1);
           SaveConfigFile(NULL);
-          SetStatus("Modo de diálogo aplicado!");
+          SetStatus("Velocidade do dialogo aplicada!");
         }
+        ImGui::Spacing();
 
-        if (s_staged.fast_diag != 0) {
-          const char *speed_labels[] = {
-            "1: Suave (2x)",
-            "2: Rápida (4x)",
-            "3: Muito Rápida (8x - Padrão)",
-            "4: Ultrarrápida (16x)",
-            "5: Instantânea (Máxima)"
-          };
-          int active_spd = g_config.fast_dialogue_speed ? (g_config.fast_dialogue_speed - 1) : 2;
-          if (active_spd < 0) active_spd = 0;
-          if (active_spd > 4) active_spd = 4;
-          bool spd_applied = false;
-          if (MenuRow_StagedStepper("row_fast_speed", "Velocidade da Aceleração", "Rapidez com que as letras preenchem a caixa de mensagem", &s_staged.fast_diag_speed, active_spd, speed_labels, IM_ARRAYSIZE(speed_labels), &spd_applied)) {
-            g_config.fast_dialogue_speed = (uint8)(s_staged.fast_diag_speed + 1);
-            SaveConfigFile(NULL);
-            SetStatus("Velocidade do diálogo aplicada!");
-          }
-        }
-
-        auto CheckFeatureRow = [](const char *id, const char *title, const char *desc, uint32_t mask) {
+        auto CheckFeatureCard = [](int idx, const char *id, const char *title, const char *desc, uint32_t mask) {
           bool val = (g_config.features0 & mask) != 0;
-          if (MenuRow_Toggle(id, title, desc, &val)) {
+          if (Card_Toggle(idx, id, title, desc, &val)) {
             if (val) g_config.features0 |= mask;
             else g_config.features0 &= ~mask;
             enhanced_features0 = g_config.features0;
             SaveConfigFile(NULL);
           }
+          ImGui::Spacing();
         };
 
-        MenuSection_Header("CONTROLES & AÇÕES RÁPIDAS");
-        CheckFeatureRow("f_switch_lr", "Troca Rápida de Itens com L / R", "Alterna o item equipado com os botões de ombro sem abrir o inventário", kFeatures0_SwitchLR);
-        CheckFeatureRow("f_switch_lr_lim", "Limitar Troca L/R a 4 Itens", "Restringe a troca rápida aos primeiros quatro itens do inventário", kFeatures0_SwitchLRLimit);
-        CheckFeatureRow("f_turn_dash", "Virar de Direção com Botas de Pégasus", "Permite mudar de rumo durante a corrida com as Pegasus Boots", kFeatures0_TurnWhileDashing);
-        CheckFeatureRow("f_collect_sword", "Coletar Itens com a Espada", "Coleta corações, rupees e chaves ao acertá-los com golpes de espada", kFeatures0_CollectItemsWithSword);
-        CheckFeatureRow("f_pots_sword", "Quebrar Potes com a Master Sword", "Permite estilhaçar vasos e jarros atacando com a Master Sword", kFeatures0_BreakPotsWithSword);
+        CardSection_Header("CONTROLES & ACOES RAPIDAS");
+        CheckFeatureCard(2, "f_switch_lr", "Troca Rapida de Itens com L / R", "Alterna o item equipado com os botoes de ombro sem abrir o inventario", kFeatures0_SwitchLR);
+        CheckFeatureCard(3, "f_switch_lr_lim", "Limitar Troca L/R a 4 Itens", "Restringe a troca rapida aos primeiros quatro itens do inventario", kFeatures0_SwitchLRLimit);
+        CheckFeatureCard(4, "f_turn_dash", "Virar de Direcao com Botas de Pegasus", "Permite mudar de rumo durante a corrida com as Pegasus Boots", kFeatures0_TurnWhileDashing);
+        CheckFeatureCard(5, "f_collect_sword", "Coletar Itens com a Espada", "Coleta coracoes, rupees e chaves ao acerta-los com golpes de espada", kFeatures0_CollectItemsWithSword);
+        CheckFeatureCard(6, "f_pots_sword", "Quebrar Potes com a Master Sword", "Permite estilhacar vasos e jarros atacando com a Master Sword", kFeatures0_BreakPotsWithSword);
 
-        MenuSection_Header("ECONOMIA & CAPACIDADE EXPANDIDA");
-        CheckFeatureRow("f_carry_rupees", "Carteira Expandida (9999 Rupees)", "Aumenta a capacidade máxima de Rupees para 9999", kFeatures0_CarryMoreRupees);
-        CheckFeatureRow("f_more_bombs", "Permitir 4 Bombas Simultâneas", "Permite colocar até 4 bombas ativas ao mesmo tempo no chão", kFeatures0_MoreActiveBombs);
-        CheckFeatureRow("f_yellow_max", "Destacar Itens no Máximo em Amarelo", "Destaca o contador numérico em amarelo quando atinge a capacidade máxima", kFeatures0_ShowMaxItemsInYellow);
-        CheckFeatureRow("f_mirror_dark", "Espelho Mágico Livre", "Permite usar o Magic Mirror em qualquer lugar para retornar ao Dark World", kFeatures0_MirrorToDarkworld);
+        CardSection_Header("ECONOMIA & CAPACIDADE EXPANDIDA");
+        CheckFeatureCard(7, "f_carry_rupees", "Carteira Expandida (9999 Rupees)", "Aumenta a capacidade maxima de Rupees para 9999", kFeatures0_CarryMoreRupees);
+        CheckFeatureCard(8, "f_more_bombs", "Permitir 4 Bombas Simultaneas", "Permite colocar ate 4 bombas ativas ao mesmo tempo no chao", kFeatures0_MoreActiveBombs);
+        CheckFeatureCard(9, "f_yellow_max", "Destacar Itens no Maximo em Amarelo", "Destaca o contador numerico em amarelo quando atinge a capacidade maxima", kFeatures0_ShowMaxItemsInYellow);
+        CheckFeatureCard(10, "f_mirror_dark", "Espelho Magico Livre", "Permite usar o Magic Mirror em qualquer lugar para retornar ao Dark World", kFeatures0_MirrorToDarkworld);
 
-        MenuSection_Header("CONVENIÊNCIA & CORREÇÕES");
-        CheckFeatureRow("f_low_health", "Silenciar Bipe de Pouca Vida", "Desativa o alarme sonoro repetitivo quando Link estiver com pouca vida", kFeatures0_DisableLowHealthBeep);
-        CheckFeatureRow("f_skip_intro", "Pular Introdução da Triforce", "Pula o logotipo inicial da Triforce pressionando qualquer botão", kFeatures0_SkipIntroOnKeypress);
-        CheckFeatureRow("f_cancel_bird", "Cancelar Viagem do Pássaro com X", "Cancela a viagem rápida da flauta pressionando o botão X", kFeatures0_CancelBirdTravel);
-        CheckFeatureRow("f_misc_fixes", "Correções de Glitches Originais", "Aplica correções a pequenos bugs visuais conhecidos do cartucho original", kFeatures0_MiscBugFixes);
+        CardSection_Header("CONVENIENCIA & CORRECOES");
+        CheckFeatureCard(11, "f_low_health", "Silenciar Bipe de Pouca Vida", "Desativa o alarme sonoro repetitivo quando Link estiver com pouca vida", kFeatures0_DisableLowHealthBeep);
+        CheckFeatureCard(12, "f_skip_intro", "Pular Introducao da Triforce", "Pula o logotipo inicial da Triforce pressionando qualquer botao", kFeatures0_SkipIntroOnKeypress);
+        CheckFeatureCard(13, "f_cancel_bird", "Cancelar Viagem do Passaro com X", "Cancela a viagem rapida da flauta pressionando o botao X", kFeatures0_CancelBirdTravel);
+        CheckFeatureCard(14, "f_misc_fixes", "Correcoes de Glitches Originais", "Aplica correcoes a pequenos bugs visuais conhecidos do cartucho original", kFeatures0_MiscBugFixes);
+
+        // 15. Botão Voltar
+        if (Card_Button(15, "btn_back_qol", "< VOLTAR AO MENU PRINCIPAL", "Retorna para a lista de categorias do menu principal", "VOLTAR (B)")) {
+          ReturnToMainMenu();
+        }
       }
 
       // =======================================================================
-      // TELA 5: TRAPAÇAS & ESTADOS DE JOGO
+      // TELA 5: TRAPAÇAS & SAVE STATES (8 ITENS)
       // =======================================================================
       else if (s_current_screen == kScreen_Cheats) {
-        if (MenuRow_Button("btn_back_cheats", "◄ VOLTAR AO MENU PRINCIPAL", "Retorna para a lista de categorias do menu", "VOLTAR (B)")) {
-          s_current_screen = kScreen_MainMenu;
-          s_needs_focus_first = true;
-          SyncStagedSettingsFromActive();
+        UpdateMenuNavigation(8);
+
+        CardSection_Header("ACOES RAPIDAS (CHEATS)");
+
+        // 0. Vida & Magia Total
+        if (Card_Button(0, "btn_full_life", "Restaurar Vida & Magia Total", "Enche todos os coracoes e a barra de magia imediatamente", "RESTAURAR")) {
+          PatchCommand('w');
+          SetStatus("Vida e magia restauradas ao maximo!");
         }
         ImGui::Spacing();
 
-        MenuSection_Header("AÇÕES RÁPIDAS (CHEATS)");
-
-        if (MenuRow_Button("btn_full_life", "Restaurar Vida & Magia Total", "Enche todos os corações e a barra de magia imediatamente", "RESTAURAR")) {
-          PatchCommand('w');
-          SetStatus("Vida e magia restauradas ao máximo!");
-        }
-
-        if (MenuRow_Button("btn_full_items", "99 Bombas, 99 Flechas & 9999 Rupees", "Enche todos os consumíveis e dinheiro ao máximo", "PREENCHER")) {
+        // 1. Full Items
+        if (Card_Button(1, "btn_full_items", "99 Bombas, 99 Flechas & 9999 Rupees", "Enche todos os consumiveis e dinheiro ao maximo", "PREENCHER")) {
           PatchCommand('W');
           SetStatus("Itens e rupees preenchidos!");
         }
+        ImGui::Spacing();
 
-        if (MenuRow_Button("btn_give_key", "Ganhar 1 Chave Pequena", "Adiciona uma Small Key ao inventário da dungeon atual", "ADICIONAR")) {
+        // 2. Chave Pequena
+        if (Card_Button(2, "btn_give_key", "Ganhar 1 Chave Pequena", "Adiciona uma Small Key ao inventario da dungeon atual", "ADICIONAR")) {
           PatchCommand('o');
-          SetStatus("Chave adicionada ao inventário!");
+          SetStatus("Chave adicionada ao inventario!");
         }
+        ImGui::Spacing();
 
-        if (MenuRow_Button("btn_soft_reset", "Reiniciar Jogo (Soft Reset)", "Executa um reinício idêntico ao console original", "REINICIAR", true)) {
+        // 3. Reiniciar Jogo
+        if (Card_Button(3, "btn_soft_reset", "Reiniciar Jogo (Soft Reset)", "Executa um reinicio identico ao console original", "REINICIAR", true)) {
           ZeldaReset(true);
           SetStatus("Jogo reiniciado!");
         }
+        ImGui::Spacing();
 
-        MenuSection_Header("ESTADOS DE JOGO (SAVE STATES)");
+        CardSection_Header("ESTADOS DE JOGO (SAVE STATES)");
 
+        // 4. Slot de Salvamento
         const char *slot_names[] = {
           "Slot 0", "Slot 1", "Slot 2", "Slot 3", "Slot 4",
           "Slot 5", "Slot 6", "Slot 7", "Slot 8", "Slot 9"
         };
         bool slot_applied = false;
-        MenuRow_StagedStepper("row_save_slot", "Slot de Salvamento Ativo", "Escolha a partição de memória para salvar ou carregar", &s_staged.save_slot, s_selected_save_slot, slot_names, IM_ARRAYSIZE(slot_names), &slot_applied);
+        Card_StagedStepper(4, "row_save_slot", "Slot de Salvamento Ativo", "Escolha a particao de memoria para salvar ou carregar", &s_staged.save_slot, s_selected_save_slot, slot_names, IM_ARRAYSIZE(slot_names), &slot_applied);
         s_selected_save_slot = s_staged.save_slot;
+        ImGui::Spacing();
 
-        if (MenuRow_Button("btn_save_slot", "Salvar Estado no Slot", "Grava o estado exato da sua gameplay na memória", "SALVAR ESTADO")) {
+        // 5. Salvar Estado
+        if (Card_Button(5, "btn_save_slot", "Salvar Estado no Slot", "Grava o estado exato da sua gameplay na memoria", "SALVAR ESTADO")) {
           SaveLoadSlot(kSaveLoad_Save, s_selected_save_slot);
           char buf[64];
           snprintf(buf, sizeof(buf), "Estado salvo no slot %d!", s_selected_save_slot);
           SetStatus(buf);
         }
+        ImGui::Spacing();
 
-        if (MenuRow_Button("btn_load_slot", "Carregar Estado do Slot", "Recupera o estado gravado anteriormente no slot selecionado", "CARREGAR ESTADO")) {
+        // 6. Carregar Estado
+        if (Card_Button(6, "btn_load_slot", "Carregar Estado do Slot", "Recupera o estado gravado anteriormente no slot selecionado", "CARREGAR ESTADO")) {
           SaveLoadSlot(kSaveLoad_Load, s_selected_save_slot);
           char buf[64];
           snprintf(buf, sizeof(buf), "Estado carregado do slot %d!", s_selected_save_slot);
           SetStatus(buf);
         }
-      }
-
-      // =======================================================================
-      // TELA 6: SOBRE & CONTROLES
-      // =======================================================================
-      else if (s_current_screen == kScreen_About) {
-        if (MenuRow_Button("btn_back_about", "◄ VOLTAR AO MENU PRINCIPAL", "Retorna para a lista de categorias do menu", "VOLTAR (B)")) {
-          s_current_screen = kScreen_MainMenu;
-          s_needs_focus_first = true;
-        }
         ImGui::Spacing();
 
-        MenuSection_Header("GUIA DE CONTROLES DO MENU");
-
-        MenuRow_Button("guide_dpad", "D-Pad / Analógico", "Navega livremente pelas opções de cima a baixo", "NAVEGAR");
-        MenuRow_Button("guide_lr", "D-Pad ◄ ►  /  Analógico", "Percorre opções e pré-visualiza antes de aplicar", "EXPLORAR");
-        MenuRow_Button("guide_a", "Botão A  /  Tecla Enter", "Entra nas categorias e aplica a opção selecionada", "CONFIRMAR");
-        MenuRow_Button("guide_b", "Botão B  /  Tecla ESC", "Retorna ao menu anterior ou fecha e volta ao jogo", "VOLTAR");
-        MenuRow_Button("guide_combo", "Atalho Global: Start + Select", "Segure ambos juntos no controle para abrir ou fechar o menu", "ATALHO");
-
-        MenuSection_Header("SOBRE O PROJETO");
-
-        MenuRow_Button("about_engine", "Motor Nativo em C/C++", "Reimplementação de Zelda: A Link to the Past com SDL2 e OpenGL", "SNES REV");
-        MenuRow_Button("about_trans", "Versão Brasileira PT-BR", "Fontes acentuadas e diálogos nativos integrados ao motor", "PT-BR");
-        MenuRow_Button("about_author", "Créditos & Desenvolvimento", "snesrev, ocornut/imgui e kelvynzucco/zelda3-overlay", "CRÉDITOS");
+        // 7. Botão Voltar
+        if (Card_Button(7, "btn_back_cheats", "< VOLTAR AO MENU PRINCIPAL", "Retorna para a lista de categorias do menu principal", "VOLTAR (B)")) {
+          ReturnToMainMenu();
+        }
       }
 
       // =======================================================================
-      // TELA 7: CONFIRMAÇÃO DE SAÍDA (SAIR DO JOGO)
+      // TELA 6: SOBRE O PROJETO & CONTROLES (8 ITENS)
+      // =======================================================================
+      else if (s_current_screen == kScreen_About) {
+        UpdateMenuNavigation(8);
+
+        CardSection_Header("GUIA DE CONTROLES DO MENU");
+        Card_Info(0, "guide_dpad", "D-Pad / Analogico", "Navega livremente pelas opcoes de cima a baixo com rolagem automatica", "NAVEGAR");
+        ImGui::Spacing();
+        Card_Info(1, "guide_lr", "D-Pad < >  /  Analogico", "Percorre e pre-visualiza opcoes seguras com ampla leitura de texto", "EXPLORAR");
+        ImGui::Spacing();
+        Card_Info(2, "guide_a", "Botao A  /  Tecla Enter", "Entra nas categorias e aplica confirmacoes e modificacoes", "CONFIRMAR");
+        ImGui::Spacing();
+        Card_Info(3, "guide_b", "Botao B  /  Tecla ESC", "Retorna ao menu principal ou fecha o overlay e volta ao jogo", "VOLTAR");
+        ImGui::Spacing();
+        Card_Info(4, "guide_combo", "Atalho Global: Start + Select", "Segure ambos juntos no controle a qualquer momento para abrir/fechar", "ATALHO");
+        ImGui::Spacing();
+
+        CardSection_Header("SOBRE O PROJETO");
+        Card_Info(5, "about_engine", "Motor Nativo em C/C++", "Reimplementacao de Zelda: A Link to the Past com SDL2 e OpenGL", "SNES REV");
+        ImGui::Spacing();
+        Card_Info(6, "about_trans", "Versao Brasileira PT-BR", "Fontes acentuadas e dialogos nativos integrados ao motor", "PT-BR");
+        ImGui::Spacing();
+
+        // 7. Botão Voltar
+        if (Card_Button(7, "btn_back_about", "< VOLTAR AO MENU PRINCIPAL", "Retorna para a lista de categorias do menu principal", "VOLTAR (B)")) {
+          ReturnToMainMenu();
+        }
+      }
+
+      // =======================================================================
+      // TELA 7: CONFIRMAÇÃO DE SAÍDA (2 ITENS)
       // =======================================================================
       else if (s_current_screen == kScreen_ExitConfirm) {
-        MenuSection_Header("ENCERRAR O JOGO");
+        UpdateMenuNavigation(2);
+
+        CardSection_Header("ENCERRAR O JOGO");
 
         ImVec2 avail = ImGui::GetContentRegionAvail();
         float center_w = 640.0f * io.FontGlobalScale;
@@ -1505,31 +1821,33 @@ static void RenderOverlayWindow() {
 
         ImGui::Spacing();
         ImGui::SetCursorPosX((avail.x - center_w) * 0.5f);
-        ImGui::TextWrapped("Deseja realmente sair de The Legend of Zelda: A Link to the Past e voltar para a Área de Trabalho?");
+        ImGui::TextWrapped("Deseja realmente sair de The Legend of Zelda: A Link to the Past e voltar para a Area de Trabalho?");
         ImGui::Spacing();
         ImGui::SetCursorPosX((avail.x - center_w) * 0.5f);
-        ImGui::TextColored(ImVec4(0.40f, 0.90f, 0.50f, 1.0f), "O progresso salvo na bateria (SRAM) e as configurações do zelda3.ini serão preservados com segurança.");
+        ImGui::TextColored(ImVec4(0.40f, 0.90f, 0.50f, 1.0f), "O progresso salvo na bateria (SRAM) e as configuracoes do zelda3.ini serao preservados com seguranca.");
         ImGui::Spacing();
         ImGui::Spacing();
 
-        if (MenuRow_Button("btn_exit_confirm", "Sim, Sair do Jogo", "Encerra o aplicativo e descarrega os dispositivos de vídeo e áudio", "SAIR AGORA", true)) {
+        // 0. Continuar Jogando
+        if (Card_Button(0, "btn_exit_cancel", "Continuar Jogando", "Cancela a saida e retorna ao Menu Principal", "VOLTAR (B)", false)) {
+          ReturnToMainMenu();
+        }
+        ImGui::Spacing();
+
+        // 1. Sim, Sair do Jogo
+        if (Card_Button(1, "btn_exit_confirm", "Sim, Sair do Jogo", "Encerra o aplicativo e descarrega os dispositivos de video e audio", "SAIR AGORA", true)) {
           SaveConfigFile(NULL);
           s_request_exit_game = true;
           SDL_Event quit_ev;
           quit_ev.type = SDL_QUIT;
           SDL_PushEvent(&quit_ev);
         }
-        ImGui::Spacing();
-
-        if (MenuRow_Button("btn_exit_cancel", "Continuar Jogando", "Cancela a saída e retorna ao Menu Principal", "VOLTAR (B)", false)) {
-          s_current_screen = kScreen_MainMenu;
-          s_needs_focus_first = true;
-          SyncStagedSettingsFromActive();
-        }
       }
 
     }
     ImGui::EndChild();
+
+    s_cursor_just_moved = false;
 
     // 3. Rodapé Informativo
     ImGui::Spacing();
@@ -1539,20 +1857,20 @@ static void RenderOverlayWindow() {
     if (s_status_message[0] != '\0' && (SDL_GetTicks() - s_status_message_time < 3500)) {
       ImGui::TextColored(ImVec4(0.40f, 0.95f, 0.45f, 1.0f), "[OK] %s", s_status_message);
     } else {
-      ImGui::TextColored(ImVec4(0.55f, 0.68f, 0.58f, 1.0f), "Configurações salvas automaticamente em zelda3.ini");
+      ImGui::TextColored(ImVec4(0.55f, 0.68f, 0.58f, 1.0f), "Configuracoes salvas automaticamente em zelda3.ini");
     }
 
     ImGui::SameLine();
-    float right_w = 660.0f * io.FontGlobalScale;
+    float right_w = 680.0f * io.FontGlobalScale;
     float r_pos = ImGui::GetWindowWidth() - right_w - 20.0f;
     if (r_pos > ImGui::GetCursorPosX()) {
       ImGui::SetCursorPosX(r_pos);
     }
 
     if (s_current_screen == kScreen_MainMenu) {
-      ImGui::TextColored(ImVec4(0.92f, 0.82f, 0.35f, 1.0f), "[D-Pad ▲▼]: Navegar | [A]: Entrar na Categoria | [B]: Fechar Menu");
+      ImGui::TextColored(ImVec4(0.92f, 0.82f, 0.35f, 1.0f), "[D-Pad / Stick]: Navegar | [A]: Entrar na Categoria | [B / Start]: Fechar");
     } else {
-      ImGui::TextColored(ImVec4(0.92f, 0.82f, 0.35f, 1.0f), "[D-Pad ▲▼]: Navegar | [◄ ►]: Pré-visualizar | [A]: Aplicar | [B]: Voltar");
+      ImGui::TextColored(ImVec4(0.92f, 0.82f, 0.35f, 1.0f), "[D-Pad / Stick]: Navegar | [< >]: Alterar | [A]: Confirmar | [B]: Voltar");
     }
   }
   ImGui::End();
