@@ -108,6 +108,9 @@ static void SetupZeldaTheme() {
   colors[ImGuiCol_TabActive]             = ImVec4(0.20f, 0.32f, 0.23f, 1.00f);
   colors[ImGuiCol_TabUnfocused]          = ImVec4(0.10f, 0.14f, 0.11f, 0.85f);
   colors[ImGuiCol_TabUnfocusedActive]   = ImVec4(0.16f, 0.24f, 0.18f, 1.00f);
+  colors[ImGuiCol_NavHighlight]          = ImVec4(0.98f, 0.85f, 0.25f, 1.00f); // Triforce Gold outline for gamepad
+  colors[ImGuiCol_NavWindowingHighlight] = ImVec4(0.98f, 0.85f, 0.25f, 0.70f);
+  colors[ImGuiCol_NavWindowingDimBg]     = ImVec4(0.00f, 0.00f, 0.00f, 0.60f);
 }
 
 static void SetStatus(const char *msg) {
@@ -185,44 +188,73 @@ void Overlay_SetOpen(bool open) {
 
 static void RenderOverlayWindow() {
   ImGuiIO& io = ImGui::GetIO();
+  ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-  // Dynamic responsive sizing: fits nicely regardless of window scale or resolution
-  float margin_x = 24.0f;
-  float margin_y = 20.0f;
-  float avail_w = io.DisplaySize.x - (margin_x * 2.0f);
-  float avail_h = io.DisplaySize.y - (margin_y * 2.0f);
+  // Permite fechar o menu pelo botão B no controle, se nenhum popup estiver aberto
+  if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight)) {
+      Overlay_Toggle();
+      return;
+    }
+  }
 
-  float target_w = avail_w;
-  if (target_w > 680.0f) target_w = 680.0f;
-  if (target_w < 260.0f) target_w = (io.DisplaySize.x > 280.0f) ? io.DisplaySize.x - 16.0f : io.DisplaySize.x;
+  // Fullscreen overlay cobrindo 100% da viewport da tela
+  ImGui::SetNextWindowPos(viewport->Pos, ImGuiCond_Always);
+  ImGui::SetNextWindowSize(viewport->Size, ImGuiCond_Always);
 
-  float target_h = avail_h;
-  if (target_h > 520.0f) target_h = 520.0f;
-  if (target_h < 190.0f) target_h = (io.DisplaySize.y > 210.0f) ? io.DisplaySize.y - 16.0f : io.DisplaySize.y;
-
-  float pos_x = (io.DisplaySize.x - target_w) * 0.5f;
-  float pos_y = (io.DisplaySize.y - target_h) * 0.5f;
-  if (pos_x < 8.0f) pos_x = 8.0f;
-  if (pos_y < 8.0f) pos_y = 8.0f;
-
-  ImGui::SetNextWindowSize(ImVec2(target_w, target_h), ImGuiCond_Always);
-  ImGui::SetNextWindowPos(ImVec2(pos_x, pos_y), ImGuiCond_Always);
-  ImGui::SetNextWindowSizeConstraints(ImVec2(260.0f, 190.0f), ImVec2(io.DisplaySize.x, io.DisplaySize.y));
-
-  // Dynamic UI font scaling
-  if (io.DisplaySize.y >= 1400.0f) {
-    io.FontGlobalScale = 1.4f;
-  } else if (io.DisplaySize.y < 460.0f) {
+  // Escala dinâmica responsiva de fonte baseada na altura da tela
+  if (viewport->Size.y >= 1400.0f) {
+    io.FontGlobalScale = 1.35f;
+  } else if (viewport->Size.y >= 900.0f) {
+    io.FontGlobalScale = 1.15f;
+  } else if (viewport->Size.y < 500.0f) {
     io.FontGlobalScale = 0.85f;
   } else {
     io.FontGlobalScale = 1.0f;
   }
 
-  if (ImGui::Begin("The Legend of Zelda: A Link to the Past - Configurações", &s_overlay_open, ImGuiWindowFlags_NoCollapse)) {
-    if (ImGui::BeginTabBar("OverlayTabs")) {
+  ImGuiWindowFlags window_flags = 
+      ImGuiWindowFlags_NoResize | 
+      ImGuiWindowFlags_NoMove | 
+      ImGuiWindowFlags_NoCollapse | 
+      ImGuiWindowFlags_NoTitleBar |
+      ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24.0f, 16.0f));
+
+  if (ImGui::Begin("##FullscreenZeldaOverlay", &s_overlay_open, window_flags)) {
+    // Cabeçalho Principal
+    ImGui::TextColored(ImVec4(0.98f, 0.85f, 0.25f, 1.0f), "THE LEGEND OF ZELDA: A LINK TO THE PAST");
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.55f, 0.75f, 0.60f, 1.0f), "|   MENU DE CONFIGURAÇÕES & OVERLAY");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Área central com scroll automático para as abas
+    float footer_height = 48.0f * io.FontGlobalScale;
+    float content_height = ImGui::GetContentRegionAvail().y - footer_height;
+    if (content_height < 100.0f) content_height = 100.0f;
+
+    if (ImGui::BeginChild("OverlayBody", ImVec2(0, content_height), false, ImGuiWindowFlags_None)) {
+      static int s_active_tab = 0;
+      static int s_requested_tab = -1;
+
+      if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+        if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1)) {
+          s_requested_tab = (s_active_tab + 6 - 1) % 6;
+        } else if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1)) {
+          s_requested_tab = (s_active_tab + 1) % 6;
+        }
+      }
+
+      if (ImGui::BeginTabBar("OverlayTabs", ImGuiTabBarFlags_None)) {
 
       // TAB 1: GRÁFICOS & VÍDEO
-      if (ImGui::BeginTabItem("Vídeo & Gráficos")) {
+      ImGuiTabItemFlags tab0_flags = (s_requested_tab == 0) ? ImGuiTabItemFlags_SetSelected : 0;
+      if (ImGui::BeginTabItem("Vídeo & Gráficos", nullptr, tab0_flags)) {
+        s_active_tab = 0;
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "Configurações de Tela");
         ImGui::Separator();
@@ -344,7 +376,9 @@ static void RenderOverlayWindow() {
       }
 
       // TAB 2: ÁUDIO & MSU-1
-      if (ImGui::BeginTabItem("Áudio & MSU-1")) {
+      ImGuiTabItemFlags tab1_flags = (s_requested_tab == 1) ? ImGuiTabItemFlags_SetSelected : 0;
+      if (ImGui::BeginTabItem("Áudio & MSU-1", nullptr, tab1_flags)) {
+        s_active_tab = 1;
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "Opções de Som");
         ImGui::Separator();
@@ -396,7 +430,9 @@ static void RenderOverlayWindow() {
       }
 
       // TAB 3: IDIOMA
-      if (ImGui::BeginTabItem("Idioma / Language")) {
+      ImGuiTabItemFlags tab2_flags = (s_requested_tab == 2) ? ImGuiTabItemFlags_SetSelected : 0;
+      if (ImGui::BeginTabItem("Idioma / Language", nullptr, tab2_flags)) {
+        s_active_tab = 2;
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "Seleção de Idioma");
         ImGui::Separator();
@@ -436,7 +472,9 @@ static void RenderOverlayWindow() {
       }
 
       // TAB 4: MELHORIAS (QOL)
-      if (ImGui::BeginTabItem("Melhorias (QoL)")) {
+      ImGuiTabItemFlags tab3_flags = (s_requested_tab == 3) ? ImGuiTabItemFlags_SetSelected : 0;
+      if (ImGui::BeginTabItem("Melhorias (QoL)", nullptr, tab3_flags)) {
+        s_active_tab = 3;
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "Recursos Modernos de Jogabilidade");
         ImGui::Separator();
@@ -498,7 +536,9 @@ static void RenderOverlayWindow() {
       }
 
       // TAB 5: CHEATS & ESTADOS
-      if (ImGui::BeginTabItem("Cheats & Estados")) {
+      ImGuiTabItemFlags tab4_flags = (s_requested_tab == 4) ? ImGuiTabItemFlags_SetSelected : 0;
+      if (ImGui::BeginTabItem("Cheats & Estados", nullptr, tab4_flags)) {
+        s_active_tab = 4;
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "Ações Rápidas (Cheats)");
         ImGui::Separator();
@@ -550,7 +590,9 @@ static void RenderOverlayWindow() {
       }
 
       // TAB 6: SOBRE
-      if (ImGui::BeginTabItem("Sobre")) {
+      ImGuiTabItemFlags tab5_flags = (s_requested_tab == 5) ? ImGuiTabItemFlags_SetSelected : 0;
+      if (ImGui::BeginTabItem("Sobre", nullptr, tab5_flags)) {
+        s_active_tab = 5;
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "The Legend of Zelda: A Link to the Past - PC Port");
         ImGui::Separator();
@@ -568,14 +610,17 @@ static void RenderOverlayWindow() {
         ImGui::EndTabItem();
       }
 
-      ImGui::EndTabBar();
+        ImGui::EndTabBar();
+        s_requested_tab = -1;
+      }
     }
+    ImGui::EndChild();
 
     ImGui::Spacing();
     ImGui::Separator();
 
     // Rodapé com botões de ação e status
-    if (ImGui::Button("Salvar", ImVec2(120, 30))) {
+    if (ImGui::Button("Salvar", ImVec2(130, 32))) {
       if (SaveConfigFile(NULL)) {
         SetStatus("Configurações salvas em zelda3.ini");
       } else {
@@ -586,7 +631,7 @@ static void RenderOverlayWindow() {
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("Fechar Menu (ESC)", ImVec2(140, 30))) {
+    if (ImGui::Button("Fechar Menu (ESC / B)", ImVec2(170, 32))) {
       Overlay_Toggle();
     }
 
@@ -598,8 +643,18 @@ static void RenderOverlayWindow() {
         s_status_message[0] = '\0';
       }
     }
+
+    // Dicas de navegação por controle no rodapé (lado direito)
+    float hints_w = 640.0f * io.FontGlobalScale;
+    float right_pos = ImGui::GetWindowWidth() - hints_w;
+    if (right_pos > ImGui::GetCursorPosX() + 15.0f) {
+      ImGui::SameLine();
+      ImGui::SetCursorPosX(right_pos);
+      ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.55f, 1.0f), "[LB/RB]: Trocar Abas | [D-Pad]: Navegar | [A]: Confirmar | [B]: Fechar");
+    }
   }
   ImGui::End();
+  ImGui::PopStyleVar(3);
 }
 
 static void RenderFpsOverlay(int fps) {

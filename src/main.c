@@ -42,6 +42,8 @@ static int RemapSdlButton(int button);
 static void HandleGamepadInput(int button, bool pressed);
 static void HandleGamepadAxisInput(int gamepad_id, int axis, int value);
 static void OpenOneGamepad(int i);
+static void CloseOneGamepad(SDL_JoystickID joyid);
+static bool CheckGamepadComboHeld(void);
 static void HandleVolumeAdjustment(int volume_adjustment);
 static void LoadAssets();
 static void SwitchDirectory();
@@ -71,6 +73,10 @@ static int g_sdl_audio_mixer_volume = SDL_MIX_MAXVOLUME;
 static struct RendererFuncs g_renderer_funcs;
 static uint32 g_gamepad_modifiers;
 static uint16 g_gamepad_last_cmd[kGamepadBtn_Count];
+#define MAX_OPENED_CONTROLLERS 8
+static SDL_GameController *g_opened_controllers[MAX_OPENED_CONTROLLERS];
+static int g_opened_controllers_count = 0;
+static bool s_gamepad_combo_was_held = false;
 
 void NORETURN Die(const char *error) {
 #if defined(NDEBUG) && defined(_WIN32)
@@ -730,6 +736,34 @@ int main(int argc, char** argv) {
           }
         }
       }
+      // Atalho de Controle: Segurar Start + Select simultaneamente alterna o Overlay
+      if (event.type == SDL_CONTROLLERBUTTONDOWN || event.type == SDL_CONTROLLERBUTTONUP) {
+        int b = RemapSdlButton(event.cbutton.button);
+        bool pressed = (event.type == SDL_CONTROLLERBUTTONDOWN);
+        static bool s_event_start_held = false;
+        static bool s_event_select_held = false;
+
+        if (b == kGamepadBtn_Start)
+          s_event_start_held = pressed;
+        else if (b == kGamepadBtn_Back || b == kGamepadBtn_Guide || event.cbutton.button == SDL_CONTROLLER_BUTTON_MISC1)
+          s_event_select_held = pressed;
+
+        bool combo = (s_event_start_held && s_event_select_held) || CheckGamepadComboHeld();
+        if (combo) {
+          if (!s_gamepad_combo_was_held) {
+            s_gamepad_combo_was_held = true;
+            Overlay_Toggle();
+            g_input1_state = 0;
+            g_gamepad_buttons = 0;
+            g_gamepad_modifiers = 0;
+            memset(g_gamepad_last_cmd, 0, sizeof(g_gamepad_last_cmd));
+          }
+          continue;
+        } else {
+          s_gamepad_combo_was_held = false;
+        }
+      }
+
       if (event.type == SDL_KEYDOWN && (event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_F12)) {
         Overlay_Toggle();
         continue;
@@ -743,6 +777,9 @@ int main(int argc, char** argv) {
       switch(event.type) {
       case SDL_CONTROLLERDEVICEADDED:
         OpenOneGamepad(event.cdevice.which);
+        break;
+      case SDL_CONTROLLERDEVICEREMOVED:
+        CloseOneGamepad(event.cdevice.which);
         break;
       case SDL_CONTROLLERAXISMOTION:
         HandleGamepadAxisInput(event.caxis.which, event.caxis.axis, event.caxis.value);
@@ -776,6 +813,37 @@ int main(int argc, char** argv) {
         running = false;
         break;
       }
+    }
+
+    bool combo_held = CheckGamepadComboHeld();
+    if (combo_held) {
+      if (!s_gamepad_combo_was_held) {
+        s_gamepad_combo_was_held = true;
+        Overlay_Toggle();
+        g_input1_state = 0;
+        g_gamepad_buttons = 0;
+        g_gamepad_modifiers = 0;
+        memset(g_gamepad_last_cmd, 0, sizeof(g_gamepad_last_cmd));
+      }
+    } else {
+      s_gamepad_combo_was_held = false;
+    }
+
+    // Pausar o jogo e o áudio enquanto o Overlay estiver aberto
+    bool overlay_active = Overlay_IsOpen();
+    if (overlay_active) {
+      if (!audiopaused && device) {
+        SDL_PauseAudioDevice(device, 1);
+        audiopaused = true;
+      }
+      DrawPpuFrameWithPerf();
+      lastTick = SDL_GetTicks();
+      SDL_Delay(16);
+      continue;
+    } else if (audiopaused != g_paused && device) {
+      SDL_PauseAudioDevice(device, g_paused);
+      audiopaused = g_paused;
+      lastTick = SDL_GetTicks();
     }
 
     if (g_paused != audiopaused) {
@@ -1012,9 +1080,46 @@ static void HandleInput(int keyCode, int keyMod, bool pressed) {
 static void OpenOneGamepad(int i) {
   if (SDL_IsGameController(i)) {
     SDL_GameController *controller = SDL_GameControllerOpen(i);
-    if (!controller)
+    if (!controller) {
       fprintf(stderr, "Could not open gamepad %d: %s\n", i, SDL_GetError());
+      return;
+    }
+    for (int c = 0; c < g_opened_controllers_count; c++) {
+      if (g_opened_controllers[c] == controller)
+        return;
+    }
+    if (g_opened_controllers_count < MAX_OPENED_CONTROLLERS) {
+      g_opened_controllers[g_opened_controllers_count++] = controller;
+    }
   }
+}
+
+static void CloseOneGamepad(SDL_JoystickID joyid) {
+  SDL_GameController *controller = SDL_GameControllerFromInstanceID(joyid);
+  if (controller) {
+    for (int c = 0; c < g_opened_controllers_count; c++) {
+      if (g_opened_controllers[c] == controller) {
+        g_opened_controllers[c] = g_opened_controllers[--g_opened_controllers_count];
+        break;
+      }
+    }
+    SDL_GameControllerClose(controller);
+  }
+}
+
+static bool CheckGamepadComboHeld(void) {
+  for (int i = 0; i < g_opened_controllers_count; i++) {
+    SDL_GameController *c = g_opened_controllers[i];
+    if (c && SDL_GameControllerGetAttached(c)) {
+      bool start = (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_START) != 0);
+      bool select = (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_BACK) != 0) ||
+                    (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_GUIDE) != 0) ||
+                    (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_MISC1) != 0);
+      if (start && select)
+        return true;
+    }
+  }
+  return false;
 }
 
 static int RemapSdlButton(int button) {
