@@ -496,6 +496,9 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       return ParseBoolBit(value, &g_config.features0, kFeatures0_GameChangingBugFixes);
     } else if (StringEqualsNoCase(key, "CancelBirdTravel")) {
       return ParseBoolBit(value, &g_config.features0, kFeatures0_CancelBirdTravel);
+    } else if (StringEqualsNoCase(key, "FastDialogue")) {
+      g_config.fast_dialogue = (uint8)strtol(value, (char**)NULL, 10);
+      return true;
     }
   }
   return false;
@@ -546,6 +549,7 @@ void ParseConfigFile(const char *filename) {
   g_config.master_volume = 100; // default master volume, 100%
   g_config.extend_adjacent_areas = true; // default enabled for seamless widescreen
   g_config.aspect_ratio_auto = false;
+  g_config.fast_dialogue = 1; // default: hold button to accelerate (modern Zelda style)
 
   if (filename == NULL)
     filename = g_config_file_path;
@@ -692,6 +696,7 @@ bool SaveConfigFile(const char *filename) {
   fprintf(f, "MiscBugFixes = %d\n", (g_config.features0 & kFeatures0_MiscBugFixes) ? 1 : 0);
   fprintf(f, "GameChangingBugFixes = %d\n", (g_config.features0 & kFeatures0_GameChangingBugFixes) ? 1 : 0);
   fprintf(f, "CancelBirdTravel = %d\n", (g_config.features0 & kFeatures0_CancelBirdTravel) ? 1 : 0);
+  fprintf(f, "FastDialogue = %d\n", g_config.fast_dialogue);
 
   if (g_keymap_backup_data) {
     fprintf(f, "\n%s\n", g_keymap_backup_data);

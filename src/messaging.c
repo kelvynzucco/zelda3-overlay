@@ -16,6 +16,9 @@
 #include "attract.h"
 #include "nmi.h"
 #include "assets.h"
+#include "config.h"
+
+static uint8 s_hold_dismiss_timer = 0;
 
 static void WorldMap_AddSprite(int spr, uint8 big, uint8 flags, uint8 ch, uint16 x, uint16 y);
 static bool WorldMap_CalculateOamCoordinates(Point16U *pt);
@@ -2145,6 +2148,7 @@ void Text_Initialize_initModuleStateLoop() {  // 8ec493
   text_tilemap_cur = 0x3980;
   Text_LoadCharacterBuffer();
   memset(messaging_buf, 0, 0x7e0);
+  s_hold_dismiss_timer = 0;
   nmi_subroutine_index = 2;
   nmi_disable_core_updates = 2;
 }
@@ -2381,20 +2385,33 @@ void RenderText_Draw_CharacterTilemap() {  // 8ec97d
 }
 
 void RenderText_Draw_MessageCharacters() {  // 8ec984
+  bool accelerate = false;
+  if (g_config.fast_dialogue == 2) {
+    accelerate = true;
+  } else if (g_config.fast_dialogue == 1) {
+    accelerate = ((joypad1L_last | joypad1H_last) & 0xc0) != 0;
+  }
+  int chars_this_frame = 0;
+
 RESTART:;
   uint32 cmd = Text_DecodeCmd(messaging_text_buffer[dialogue_msg_read_pos],
       &messaging_text_buffer[dialogue_msg_read_pos + 1]);
 
   switch (TEXTCMD_CMD(cmd)) {
   case kTextCmd_IsLetter:
-    if (vwf_line_speed_cur >= 2) {
+    if (!accelerate && vwf_line_speed_cur >= 2) {
       vwf_line_speed_cur--;
       break;
     }
     VWF_RenderSingle(TEXTCMD_PARAM(cmd));
     dialogue_msg_read_pos += 1 + TEXTCMD_MULTIBYTE(cmd);
-    if (vwf_line_speed_cur == 0)
+    if (accelerate) {
+      vwf_line_speed_cur = 0;
+      if (++chars_this_frame < 8)
+        goto RESTART;
+    } else if (vwf_line_speed_cur == 0) {
       goto RESTART;
+    }
     break;
   case kTextCmd_NextPic:  // RenderText_Draw_NextImage
     if (main_module_index == 20) {
@@ -2446,9 +2463,18 @@ RESTART:;
   case kTextCmd_3:  // VWF_SetLine
     vwf_curline = kVWF_RowPositions[TEXTCMD_CMD(cmd) - kTextCmd_1];
     vwf_flag_next_line = 1;
+    if (accelerate && chars_this_frame < 8) {
+      dialogue_msg_read_pos += 1 + TEXTCMD_MULTIBYTE(cmd);
+      goto RESTART;
+    }
     goto COMMAND_DONE;
   case kTextCmd_Wait:  // RenderText_Draw_Wait
-    switch (joypad1L_last & 0x80 ? 1 : text_wait_countdown) {
+    if (accelerate || (joypad1L_last & 0x80)) {
+      BYTE(text_wait_countdown) = 0;
+      dialogue_msg_read_pos += 1 + TEXTCMD_MULTIBYTE(cmd);
+      goto RESTART;
+    }
+    switch (text_wait_countdown) {
     case 0:
       text_wait_countdown = kText_WaitDurations[TEXTCMD_PARAM(cmd)] - 1;
       break;
@@ -2462,29 +2488,60 @@ RESTART:;
     break;
   case kTextCmd_Sound:  // RenderText_Draw_PlaySfx
     sound_effect_2 = TEXTCMD_PARAM(cmd);
+    if (accelerate && chars_this_frame < 8) {
+      dialogue_msg_read_pos += 1 + TEXTCMD_MULTIBYTE(cmd);
+      goto RESTART;
+    }
     goto COMMAND_DONE;
   case kTextCmd_Speed:  // RenderText_Draw_SetSpeed
     vwf_line_speed = vwf_line_speed_cur = TEXTCMD_PARAM(cmd);
+    if (accelerate && chars_this_frame < 8) {
+      dialogue_msg_read_pos += 1 + TEXTCMD_MULTIBYTE(cmd);
+      goto RESTART;
+    }
     goto COMMAND_DONE;
   case kTextCmd_Waitkey:  // RenderText_Draw_PauseForInput
+    if (accelerate && text_wait_countdown2 > 1)
+      text_wait_countdown2 = 1;
     if (text_wait_countdown2 != 0) {
       if (--text_wait_countdown2 == 1)
         sound_effect_2 = 36;
     } else {
-      if ((filtered_joypad_H | filtered_joypad_L) & 0xc0) {
-        text_wait_countdown2 = 28;
+      bool hold_advance = false;
+      if (accelerate && ((joypad1L_last | joypad1H_last) & 0xc0)) {
+        if (++s_hold_dismiss_timer >= 12) {
+          hold_advance = true;
+          s_hold_dismiss_timer = 0;
+        }
+      } else {
+        s_hold_dismiss_timer = 0;
+      }
+      if (((filtered_joypad_H | filtered_joypad_L) & 0xc0) || hold_advance) {
+        text_wait_countdown2 = accelerate ? 2 : 28;
         goto COMMAND_DONE;
       }
     }
     break;
   case kTextCmd_EndMessage:  // RenderText_Draw_Terminate
+    if (accelerate && text_wait_countdown2 > 1)
+      text_wait_countdown2 = 1;
     if (text_wait_countdown2 != 0) {
       if (--text_wait_countdown2 == 1)
         sound_effect_2 = 36;
     } else {
-      if ((filtered_joypad_H | filtered_joypad_L)) {
+      bool hold_dismiss = false;
+      if (accelerate && ((joypad1L_last | joypad1H_last) & 0xc0)) {
+        if (++s_hold_dismiss_timer >= 12) {
+          hold_dismiss = true;
+          s_hold_dismiss_timer = 0;
+        }
+      } else {
+        s_hold_dismiss_timer = 0;
+      }
+      if ((filtered_joypad_H | filtered_joypad_L) || hold_dismiss) {
         text_render_state = 4;
-        text_wait_countdown2 = 28;
+        text_wait_countdown2 = accelerate ? 2 : 28;
+        s_hold_dismiss_timer = 0;
       }
     }
     break;
@@ -2580,6 +2637,9 @@ void VWF_RenderSingle(int c) {  // 8ecab8
 }
 
 void RenderText_Draw_Choose2LowOr3() {  // 8ecd1a
+  bool accelerate = (g_config.fast_dialogue == 2) || (g_config.fast_dialogue == 1 && ((joypad1L_last | joypad1H_last) & 0xc0));
+  if (accelerate && text_wait_countdown2 > 1)
+    text_wait_countdown2 = 1;
   if (text_wait_countdown2 != 0) {
     if (--text_wait_countdown2 == 1)
       sound_effect_2 = 36;
@@ -2613,6 +2673,7 @@ void RenderText_Draw_ChooseItem() {  // 8ecd88
       RenderText_Refresh();
       return;
     }
+    choice_in_multiselect_box = (choice_in_multiselect_box & 0x1f);
     RenderText_FindYItem_Next();
     RenderText_Refresh();
   }
@@ -2652,6 +2713,9 @@ void RenderText_DrawSelectedYItem() {  // 8ece14
 }
 
 void RenderText_Draw_Choose2HiOr3() {  // 8ece83
+  bool accelerate = (g_config.fast_dialogue == 2) || (g_config.fast_dialogue == 1 && ((joypad1L_last | joypad1H_last) & 0xc0));
+  if (accelerate && text_wait_countdown2 > 1)
+    text_wait_countdown2 = 1;
   if (text_wait_countdown2 != 0) {
     if (--text_wait_countdown2 == 1)
       sound_effect_2 = 36;
@@ -2671,6 +2735,9 @@ void RenderText_Draw_Choose2HiOr3() {  // 8ece83
 }
 
 void RenderText_Draw_Choose3() {  // 8ecef7
+  bool accelerate = (g_config.fast_dialogue == 2) || (g_config.fast_dialogue == 1 && ((joypad1L_last | joypad1H_last) & 0xc0));
+  if (accelerate && text_wait_countdown2 > 1)
+    text_wait_countdown2 = 1;
   uint8 y;
   if (text_wait_countdown2 != 0) {
     if (--text_wait_countdown2 == 1)
@@ -2693,6 +2760,9 @@ void RenderText_Draw_Choose3() {  // 8ecef7
 }
 
 void RenderText_Draw_Choose1Or2() {  // 8ecf72
+  bool accelerate = (g_config.fast_dialogue == 2) || (g_config.fast_dialogue == 1 && ((joypad1L_last | joypad1H_last) & 0xc0));
+  if (accelerate && text_wait_countdown2 > 1)
+    text_wait_countdown2 = 1;
   uint8 y;
   if (text_wait_countdown2 != 0) {
     if (--text_wait_countdown2 == 1)
@@ -2713,29 +2783,38 @@ void RenderText_Draw_Choose1Or2() {  // 8ecf72
 }
 
 bool RenderText_Draw_Scroll() {  // 8ecfe2
-  uint8 r2 = dialogue_scroll_speed;
-  do {
-    for (int i = 0; i < 0x7e0; i += 16) {
-      uint16 *p = (uint16 *)((uint8 *)messaging_buf + i);
-      p[0] = p[1];
-      p[1] = p[2];
-      p[2] = p[3];
-      p[3] = p[4];
-      p[4] = p[5];
-      p[5] = p[6];
-      p[6] = p[7];
-      p[7] = p[168];
-    }
-    uint16 *p = messaging_buf;
-    for (int i = 0x34f; i <= 0x3ef; i += 8)
-      p[i] = 0;
+  bool accelerate = false;
+  if (g_config.fast_dialogue == 2) {
+    accelerate = true;
+  } else if (g_config.fast_dialogue == 1) {
+    accelerate = ((joypad1L_last | joypad1H_last) & 0xc0) != 0;
+  }
+  int passes = accelerate ? 4 : 1;
+  while (passes--) {
+    uint8 r2 = dialogue_scroll_speed;
+    do {
+      for (int i = 0; i < 0x7e0; i += 16) {
+        uint16 *p = (uint16 *)((uint8 *)messaging_buf + i);
+        p[0] = p[1];
+        p[1] = p[2];
+        p[2] = p[3];
+        p[3] = p[4];
+        p[4] = p[5];
+        p[5] = p[6];
+        p[6] = p[7];
+        p[7] = p[168];
+      }
+      uint16 *p = messaging_buf;
+      for (int i = 0x34f; i <= 0x3ef; i += 8)
+        p[i] = 0;
 
-    if ((++byte_7E1CDF & 0xf) == 0) {
-      vwf_curline = 4;
-      vwf_flag_next_line = 1;
-      return true;
-    }
-  } while (r2--);
+      if ((++byte_7E1CDF & 0xf) == 0) {
+        vwf_curline = 4;
+        vwf_flag_next_line = 1;
+        return true;
+      }
+    } while (r2--);
+  }
   return false;
 }
 

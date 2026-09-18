@@ -450,6 +450,19 @@ static void RenderOverlayWindow() {
           }
         };
 
+        // Aceleração de Diálogos
+        const char *fast_diag_modes[] = {
+          "Desativado (Original)",
+          "Ao Segurar Botão (A / B / X / Y) [Zelda Moderno]",
+          "Sempre Rápido"
+        };
+        int fd_curr = g_config.fast_dialogue;
+        if (ImGui::Combo("Acelerar Diálogos", &fd_curr, fast_diag_modes, IM_ARRAYSIZE(fast_diag_modes))) {
+          g_config.fast_dialogue = (uint8)fd_curr;
+        }
+        ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "Acelera a digitação do texto para o final da caixa e agiliza a saída do diálogo.");
+        ImGui::Spacing();
+
         CheckFeature("Troca Rápida de Itens com botões L / R", kFeatures0_SwitchLR);
         CheckFeature("Limitar troca rápida L/R apenas aos primeiros 4 itens", kFeatures0_SwitchLRLimit);
         CheckFeature("Virar de direção enquanto corre com as Botas de Pégasus", kFeatures0_TurnWhileDashing);

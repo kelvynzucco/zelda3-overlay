@@ -71,6 +71,7 @@ typedef struct Config {
   bool disable_frame_delay;
   uint8 msuvolume;
   uint8 master_volume;
+  uint8 fast_dialogue;
   uint32 features0;
 
   const char *link_graphics;
