@@ -186,6 +186,73 @@ void Overlay_SetOpen(bool open) {
 }
 
 
+static bool s_request_exit_game = false;
+
+bool Overlay_ShouldExit(void) {
+  return s_request_exit_game;
+}
+
+// Estrutura de Grade Responsiva para Blocos / Cartões
+struct CardGrid {
+  bool two_cols;
+  bool in_table;
+  int card_index;
+
+  void Begin(const char *grid_id, float avail_w) {
+    two_cols = (avail_w >= 700.0f);
+    card_index = 0;
+    if (two_cols) {
+      in_table = ImGui::BeginTable(grid_id, 2, ImGuiTableFlags_SizingStretchSame);
+    } else {
+      in_table = false;
+    }
+  }
+
+  void Next() {
+    if (in_table) {
+      ImGui::TableNextColumn();
+    } else if (card_index > 0) {
+      ImGui::Spacing();
+      ImGui::Spacing();
+    }
+    card_index++;
+  }
+
+  void End() {
+    if (in_table) {
+      ImGui::EndTable();
+    }
+  }
+};
+
+static bool BeginCard(const char *id, const char *title, const char *subtitle = nullptr) {
+  ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 14.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.0f, 10.0f));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.10f, 0.14f, 0.12f, 0.88f));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.78f, 0.65f, 0.22f, 0.40f));
+
+  ImGuiChildFlags child_flags = ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_NavFlattened;
+  bool open = ImGui::BeginChild(id, ImVec2(0.0f, 0.0f), child_flags, ImGuiWindowFlags_None);
+
+  if (title && title[0]) {
+    ImGui::TextColored(ImVec4(0.98f, 0.85f, 0.25f, 1.0f), "%s", title);
+    if (subtitle && subtitle[0]) {
+      ImGui::TextColored(ImVec4(0.60f, 0.72f, 0.65f, 1.0f), "%s", subtitle);
+    }
+    ImGui::Separator();
+    ImGui::Spacing();
+  }
+
+  return open;
+}
+
+static void EndCard() {
+  ImGui::EndChild();
+  ImGui::PopStyleColor(2);
+  ImGui::PopStyleVar(3);
+}
+
 static void RenderOverlayWindow() {
   ImGuiIO& io = ImGui::GetIO();
   ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -233,7 +300,7 @@ static void RenderOverlayWindow() {
     ImGui::Spacing();
 
     // Área central com scroll automático para as abas
-    float footer_height = 48.0f * io.FontGlobalScale;
+    float footer_height = 52.0f * io.FontGlobalScale;
     float content_height = ImGui::GetContentRegionAvail().y - footer_height;
     if (content_height < 100.0f) content_height = 100.0f;
 
@@ -251,13 +318,11 @@ static void RenderOverlayWindow() {
 
       if (ImGui::BeginTabBar("OverlayTabs", ImGuiTabBarFlags_None)) {
 
-      // TAB 1: GRÁFICOS & VÍDEO
+      // TAB 0: VÍDEO & GRÁFICOS
       ImGuiTabItemFlags tab0_flags = (s_requested_tab == 0) ? ImGuiTabItemFlags_SetSelected : 0;
       if (ImGui::BeginTabItem("Vídeo & Gráficos", nullptr, tab0_flags)) {
         s_active_tab = 0;
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "Configurações de Tela");
-        ImGui::Separator();
 
         // Resolução da Tela
         int cur_w = g_config.window_width;
@@ -283,201 +348,270 @@ static void RenderOverlayWindow() {
           snprintf(current_res_str, sizeof(current_res_str), "Personalizada (%d x %d)", cur_w, cur_h);
         }
 
-        if (ImGui::BeginCombo("Resolução da Janela", current_res_str)) {
-          for (size_t i = 0; i < IM_ARRAYSIZE(kStandardResolutions); i++) {
-            bool is_selected = (selected_res_idx == (int)i);
-            if (ImGui::Selectable(kStandardResolutions[i].name, is_selected)) {
-              SetWindowResolution(kStandardResolutions[i].width, kStandardResolutions[i].height);
+        float avail_w = ImGui::GetContentRegionAvail().x;
+        CardGrid grid;
+        grid.Begin("VideoGrid", avail_w);
+
+        // BLOCO 1: Resolução & Exibição
+        grid.Next();
+        if (BeginCard("CardRes", "Resolução & Exibição", "Tamanho da janela e modo de tela")) {
+          ImGui::Text("Resolução da Janela:");
+          ImGui::SetNextItemWidth(-1.0f);
+          if (ImGui::BeginCombo("##ResCombo", current_res_str)) {
+            for (size_t i = 0; i < IM_ARRAYSIZE(kStandardResolutions); i++) {
+              bool is_selected = (selected_res_idx == (int)i);
+              if (ImGui::Selectable(kStandardResolutions[i].name, is_selected)) {
+                SetWindowResolution(kStandardResolutions[i].width, kStandardResolutions[i].height);
+              }
+              if (is_selected) {
+                ImGui::SetItemDefaultFocus();
+              }
             }
-            if (is_selected) {
-              ImGui::SetItemDefaultFocus();
-            }
+            ImGui::EndCombo();
           }
-          ImGui::EndCombo();
+
+          ImGui::Spacing();
+          ImGui::Text("Modo de Exibição:");
+          const char *fs_items[] = { "Janela (Windowed)", "Tela Cheia sem Bordas (Borderless)", "Tela Cheia Exclusiva (Fullscreen)" };
+          int fs_current = g_config.fullscreen;
+          ImGui::SetNextItemWidth(-1.0f);
+          if (ImGui::Combo("##FsCombo", &fs_current, fs_items, IM_ARRAYSIZE(fs_items))) {
+            g_config.fullscreen = (uint8)fs_current;
+            SetFullscreenMode(fs_current);
+          }
+
+          ImGui::Spacing();
+          ImGui::Text("Escala da Janela:");
+          int cur_scale = g_config.window_scale ? g_config.window_scale : 3;
+          ImGui::SetNextItemWidth(-1.0f);
+          if (ImGui::SliderInt("##ScaleSlider", &cur_scale, 1, 10, "%dx Escala")) {
+            SetWindowScale(cur_scale);
+          }
         }
-        ImGui::Spacing();
+        EndCard();
 
-        // Fullscreen
-        const char *fs_items[] = { "Janela (Windowed)", "Tela Cheia sem Bordas (Borderless)", "Tela Cheia Exclusiva (Fullscreen)" };
-        int fs_current = g_config.fullscreen;
-        if (ImGui::Combo("Modo de Exibição", &fs_current, fs_items, IM_ARRAYSIZE(fs_items))) {
-          g_config.fullscreen = (uint8)fs_current;
-          SetFullscreenMode(fs_current);
+        // BLOCO 2: Proporção de Tela & Widescreen
+        grid.Next();
+        if (BeginCard("CardAspect", "Proporção de Tela & Áreas", "Aspect Ratio e expansão horizontal")) {
+          ImGui::Text("Proporção de Tela (Aspect Ratio):");
+          const char *ar_items[] = {
+            "Auto (Ajustar à Janela / Livre)",
+            "4:3 (Original SNES)",
+            "16:9 (Widescreen)",
+            "16:10",
+            "18:9",
+            "21:9 (Ultrawide)",
+            "32:9 (Super Ultrawide)"
+          };
+          int ar_current = GetAspectRatioIndex();
+          ImGui::SetNextItemWidth(-1.0f);
+          if (ImGui::Combo("##ArCombo", &ar_current, ar_items, IM_ARRAYSIZE(ar_items))) {
+            SetAspectRatio(ar_current);
+          }
+          if (g_config.aspect_ratio_auto) {
+            ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.40f, 1.0f), "Modo Livre Ativo: Preenche 100% da tela sem barras pretas.");
+          }
+
+          ImGui::Spacing();
+          bool ext_adj = g_config.extend_adjacent_areas;
+          if (ImGui::Checkbox("Carregar Áreas Adjacentes no Limite da Tela", &ext_adj)) {
+            g_config.extend_adjacent_areas = ext_adj;
+          }
+          ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "Elimina barras pretas ao aproximar da borda do mapa em Widescreen,\ncarregando a área vizinha em tempo real.");
         }
+        EndCard();
 
-        // Aspect ratio
-        const char *ar_items[] = {
-          "Auto (Ajustar à Janela / Livre)",
-          "4:3 (Original SNES)",
-          "16:9 (Widescreen)",
-          "16:10",
-          "18:9",
-          "21:9 (Ultrawide)",
-          "32:9 (Super Ultrawide)"
-        };
-        int ar_current = GetAspectRatioIndex();
+        // BLOCO 3: Renderizador & Filtros
+        grid.Next();
+        if (BeginCard("CardRenderer", "Renderizador & Filtros PPU", "Melhorias gráficas e fidelidade visual")) {
+          bool new_ppu = g_config.new_renderer;
+          if (ImGui::Checkbox("Renderizador PPU Otimizado (Mais rápido / Moderno)", &new_ppu)) {
+            g_config.new_renderer = new_ppu;
+          }
 
-        if (ImGui::Combo("Proporção de Tela (Aspect Ratio)", &ar_current, ar_items, IM_ARRAYSIZE(ar_items))) {
-          SetAspectRatio(ar_current);
+          bool mode7 = g_config.enhanced_mode7;
+          if (ImGui::Checkbox("Modo 7 Aprimorado (Enhanced Mode 7 em Alta Resolução)", &mode7)) {
+            g_config.enhanced_mode7 = mode7;
+          }
+
+          bool no_spr_lim = g_config.no_sprite_limits;
+          if (ImGui::Checkbox("Remover Limite de Sprites (Sem flickering do SNES)", &no_spr_lim)) {
+            g_config.no_sprite_limits = no_spr_lim;
+          }
+
+          bool lin_filt = g_config.linear_filtering;
+          if (ImGui::Checkbox("Filtro Linear (Bilinear Filtering)", &lin_filt)) {
+            g_config.linear_filtering = lin_filt;
+          }
         }
-        if (g_config.aspect_ratio_auto) {
-          ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.40f, 1.0f), "Modo Livre Ativo: O jogo preenche 100% da janela sem barras pretas.");
+        EndCard();
+
+        // BLOCO 4: Desempenho & Acessibilidade
+        grid.Next();
+        if (BeginCard("CardPerf", "Desempenho & Acessibilidade", "Taxa de quadros e conforto visual")) {
+          bool limit_60 = !g_config.disable_frame_delay;
+          if (ImGui::Checkbox("Limitar em 60 FPS (Velocidade original do SNES)", &limit_60)) {
+            g_config.disable_frame_delay = !limit_60;
+          }
+
+          bool fps_hud = g_config.display_fps;
+          if (ImGui::Checkbox("Exibir Contador de FPS na Tela (HUD / OSD)", &fps_hud)) {
+            g_config.display_fps = fps_hud;
+          }
+
+          bool dim_flash = (g_config.features0 & kFeatures0_DimFlashes) != 0;
+          if (ImGui::Checkbox("Diminuir Flashes de Luz (Fotossensibilidade)", &dim_flash)) {
+            if (dim_flash) g_config.features0 |= kFeatures0_DimFlashes;
+            else g_config.features0 &= ~kFeatures0_DimFlashes;
+          }
         }
+        EndCard();
 
-        bool ext_adj = g_config.extend_adjacent_areas;
-        if (ImGui::Checkbox("Carregar Áreas Adjacentes no Limite da Tela", &ext_adj)) {
-          g_config.extend_adjacent_areas = ext_adj;
-        }
-        ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "Elimina as barras pretas ao se aproximar das bordas do mapa em Widescreen,\ncarregando visualmente a área vizinha em tempo real.");
-
-        ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "Filtros & Renderização");
-        ImGui::Separator();
-
-        bool lin_filt = g_config.linear_filtering;
-        if (ImGui::Checkbox("Filtro Linear (Bilinear Filtering)", &lin_filt)) {
-          g_config.linear_filtering = lin_filt;
-        }
-
-        bool no_spr_lim = g_config.no_sprite_limits;
-        if (ImGui::Checkbox("Remover Limite de Sprites (Elimina flickering original do SNES)", &no_spr_lim)) {
-          g_config.no_sprite_limits = no_spr_lim;
-        }
-
-        bool mode7 = g_config.enhanced_mode7;
-        if (ImGui::Checkbox("Modo 7 Aprimorado (Enhanced Mode 7 - Mapa em Alta Resolução)", &mode7)) {
-          g_config.enhanced_mode7 = mode7;
-        }
-
-        bool new_ppu = g_config.new_renderer;
-        if (ImGui::Checkbox("Renderizador PPU Otimizado (Novo Renderer mais rápido)", &new_ppu)) {
-          g_config.new_renderer = new_ppu;
-        }
-
-        bool dim_flash = (g_config.features0 & kFeatures0_DimFlashes) != 0;
-        if (ImGui::Checkbox("Diminuir Flashes de Luz (Acessibilidade / Fotossensibilidade)", &dim_flash)) {
-          if (dim_flash) g_config.features0 |= kFeatures0_DimFlashes;
-          else g_config.features0 &= ~kFeatures0_DimFlashes;
-        }
-
-        bool fps_hud = g_config.display_fps;
-        if (ImGui::Checkbox("Exibir Contador de FPS na Tela (HUD / OSD)", &fps_hud)) {
-          g_config.display_fps = fps_hud;
-        }
-
-        ImGui::SameLine();
-        bool limit_60 = !g_config.disable_frame_delay;
-        if (ImGui::Checkbox("Limitar em 60 FPS", &limit_60)) {
-          g_config.disable_frame_delay = !limit_60;
-        }
-        ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "A velocidade original do SNES é de 60 FPS.");
-
+        grid.End();
         ImGui::EndTabItem();
       }
 
-      // TAB 2: ÁUDIO & MSU-1
+      // TAB 1: ÁUDIO & MSU-1
       ImGuiTabItemFlags tab1_flags = (s_requested_tab == 1) ? ImGuiTabItemFlags_SetSelected : 0;
       if (ImGui::BeginTabItem("Áudio & MSU-1", nullptr, tab1_flags)) {
         s_active_tab = 1;
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "Opções de Som");
-        ImGui::Separator();
 
-        bool audio_en = g_config.enable_audio;
-        if (ImGui::Checkbox("Áudio Ativado", &audio_en)) {
-          g_config.enable_audio = audio_en;
+        float avail_w = ImGui::GetContentRegionAvail().x;
+        CardGrid grid;
+        grid.Begin("AudioGrid", avail_w);
+
+        // BLOCO 1: Áudio Global
+        grid.Next();
+        if (BeginCard("CardMasterAudio", "Áudio Global (Master)", "Volume geral de músicas e efeitos sonoros")) {
+          bool audio_en = g_config.enable_audio;
+          if (ImGui::Checkbox("Áudio Ativado", &audio_en)) {
+            g_config.enable_audio = audio_en;
+          }
+
+          ImGui::Spacing();
+          ImGui::Text("Volume Geral:");
+          int master_vol = GetMasterVolume();
+          ImGui::SetNextItemWidth(-1.0f);
+          if (ImGui::SliderInt("##MasterVolSlider", &master_vol, 0, 100, "%d%%")) {
+            SetMasterVolume(master_vol);
+          }
+          ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "Controla o volume global do emulador (efeitos e músicas).");
         }
+        EndCard();
 
-        int master_vol = GetMasterVolume();
-        if (ImGui::SliderInt("Volume Geral (Master)", &master_vol, 0, 100, "%d%%")) {
-          SetMasterVolume(master_vol);
+        // BLOCO 2: MSU-1
+        grid.Next();
+        if (BeginCard("CardMsu", "MSU-1 (Áudio Orquestrado em CD)", "Substitui trilha sintetizada por faixas orquestradas reais")) {
+          ImGui::Text("Modo MSU-1:");
+          const char *msu_modes[] = { "Desativado", "MSU-1 Padrão", "MSU-1 Deluxe", "Opuz", "Deluxe + Opuz" };
+          int msu_curr = 0;
+          if (g_config.enable_msu == kMsuEnabled_Msu) msu_curr = 1;
+          else if (g_config.enable_msu == kMsuEnabled_MsuDeluxe) msu_curr = 2;
+          else if (g_config.enable_msu == kMsuEnabled_Opuz) msu_curr = 3;
+          else if (g_config.enable_msu == (kMsuEnabled_MsuDeluxe | kMsuEnabled_Opuz)) msu_curr = 4;
+
+          ImGui::SetNextItemWidth(-1.0f);
+          if (ImGui::Combo("##MsuCombo", &msu_curr, msu_modes, IM_ARRAYSIZE(msu_modes))) {
+            if (msu_curr == 0) g_config.enable_msu = 0;
+            else if (msu_curr == 1) g_config.enable_msu = kMsuEnabled_Msu;
+            else if (msu_curr == 2) g_config.enable_msu = kMsuEnabled_MsuDeluxe;
+            else if (msu_curr == 3) g_config.enable_msu = kMsuEnabled_Opuz;
+            else if (msu_curr == 4) g_config.enable_msu = kMsuEnabled_MsuDeluxe | kMsuEnabled_Opuz;
+            ZeldaEnableMsu(g_config.enable_msu);
+          }
+
+          ImGui::Spacing();
+          ImGui::Text("Volume das Músicas MSU-1:");
+          int msu_vol = g_config.msuvolume;
+          ImGui::SetNextItemWidth(-1.0f);
+          if (ImGui::SliderInt("##MsuVolSlider", &msu_vol, 0, 100, "%d%%")) {
+            g_config.msuvolume = (uint8)msu_vol;
+          }
+
+          ImGui::Spacing();
+          bool resume_msu = g_config.resume_msu;
+          if (ImGui::Checkbox("Continuar faixa de onde parou ao voltar para a área", &resume_msu)) {
+            g_config.resume_msu = resume_msu;
+          }
         }
-        ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "Controla o volume global (músicas originais do SNES e efeitos sonoros).");
+        EndCard();
 
-        ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "MSU-1 (Trilhas Orquestradas / CD Audio)");
-        ImGui::Separator();
-        ImGui::TextWrapped("O MSU-1 permite substituir a trilha sonora sintetizada do SNES por faixas orquestradas reais em áudio de alta definição.");
-
-        const char *msu_modes[] = { "Desativado", "MSU-1 Padrão", "MSU-1 Deluxe", "Opuz", "Deluxe + Opuz" };
-        int msu_curr = 0;
-        if (g_config.enable_msu == kMsuEnabled_Msu) msu_curr = 1;
-        else if (g_config.enable_msu == kMsuEnabled_MsuDeluxe) msu_curr = 2;
-        else if (g_config.enable_msu == kMsuEnabled_Opuz) msu_curr = 3;
-        else if (g_config.enable_msu == (kMsuEnabled_MsuDeluxe | kMsuEnabled_Opuz)) msu_curr = 4;
-
-        if (ImGui::Combo("Modo MSU-1", &msu_curr, msu_modes, IM_ARRAYSIZE(msu_modes))) {
-          if (msu_curr == 0) g_config.enable_msu = 0;
-          else if (msu_curr == 1) g_config.enable_msu = kMsuEnabled_Msu;
-          else if (msu_curr == 2) g_config.enable_msu = kMsuEnabled_MsuDeluxe;
-          else if (msu_curr == 3) g_config.enable_msu = kMsuEnabled_Opuz;
-          else if (msu_curr == 4) g_config.enable_msu = kMsuEnabled_MsuDeluxe | kMsuEnabled_Opuz;
-          ZeldaEnableMsu(g_config.enable_msu);
-        }
-
-        int msu_vol = g_config.msuvolume;
-        if (ImGui::SliderInt("Volume das Músicas MSU-1", &msu_vol, 0, 100, "%d%%")) {
-          g_config.msuvolume = (uint8)msu_vol;
-        }
-        ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "Ajusta o ganho das músicas orquestradas MSU-1 relativo aos efeitos sonoros.");
-
-        bool resume_msu = g_config.resume_msu;
-        if (ImGui::Checkbox("Continuar faixa de onde parou ao retornar para uma área", &resume_msu)) {
-          g_config.resume_msu = resume_msu;
-        }
-
+        grid.End();
         ImGui::EndTabItem();
       }
 
-      // TAB 3: IDIOMA
+      // TAB 2: IDIOMA
       ImGuiTabItemFlags tab2_flags = (s_requested_tab == 2) ? ImGuiTabItemFlags_SetSelected : 0;
       if (ImGui::BeginTabItem("Idioma / Language", nullptr, tab2_flags)) {
         s_active_tab = 2;
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "Seleção de Idioma");
-        ImGui::Separator();
 
-        const char *lang_names[] = {
-          "Português do Brasil (PT-BR)",
-          "English (US)",
-          "Deutsch (Alemão)",
-          "Français (Francês)",
-          "Español (Espanhol)",
-          "Polski (Polonês)",
-          "Nederlands (Holandês)",
-          "Svenska (Sueco)"
-        };
-        const char *lang_codes[] = { "pt", "us", "de", "fr", "es", "pl", "nl", "sv" };
+        float avail_w = ImGui::GetContentRegionAvail().x;
+        CardGrid grid;
+        grid.Begin("LangGrid", avail_w);
 
-        int current_lang_idx = 1; // default us
-        if (g_config.language) {
-          for (int i = 0; i < (int)IM_ARRAYSIZE(lang_codes); i++) {
-            if (strcmp(g_config.language, lang_codes[i]) == 0) {
-              current_lang_idx = i;
-              break;
+        // BLOCO 1: Seleção de Idioma
+        grid.Next();
+        if (BeginCard("CardLanguage", "Seleção de Idioma / Language", "Escolha a tradução dos textos e fontes")) {
+          const char *lang_names[] = {
+            "Português do Brasil (PT-BR)",
+            "English (US)",
+            "Deutsch (Alemão)",
+            "Français (Francês)",
+            "Español (Espanhol)",
+            "Polski (Polonês)",
+            "Nederlands (Holandês)",
+            "Svenska (Sueco)"
+          };
+          const char *lang_codes[] = { "pt", "us", "de", "fr", "es", "pl", "nl", "sv" };
+
+          int current_lang_idx = 1;
+          if (g_config.language) {
+            for (int i = 0; i < (int)IM_ARRAYSIZE(lang_codes); i++) {
+              if (strcmp(g_config.language, lang_codes[i]) == 0) {
+                current_lang_idx = i;
+                break;
+              }
             }
           }
+
+          ImGui::Text("Idioma Ativo:");
+          ImGui::SetNextItemWidth(-1.0f);
+          if (ImGui::Combo("##LangCombo", &current_lang_idx, lang_names, IM_ARRAYSIZE(lang_names))) {
+            g_config.language = lang_codes[current_lang_idx];
+            ZeldaSetLanguage(g_config.language);
+            SetStatus("Idioma alterado com sucesso!");
+          }
+
+          ImGui::Spacing();
+          ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.45f, 1.0f), "Dica PT-BR:");
+          ImGui::TextWrapped("Para o português, o jogo utiliza as fontes acentuadas e os diálogos nativos extraídos da sua cópia brasileira.");
         }
+        EndCard();
 
-        if (ImGui::Combo("Idioma Ativo", &current_lang_idx, lang_names, IM_ARRAYSIZE(lang_names))) {
-          g_config.language = lang_codes[current_lang_idx];
-          ZeldaSetLanguage(g_config.language);
-          SetStatus("Idioma alterado com sucesso!");
+        // BLOCO 2: Recursos de Tradução
+        grid.Next();
+        if (BeginCard("CardLangInfo", "Recursos de Tradução", "Fontes e acentuação gráfica")) {
+          ImGui::BulletText("Suporte completo a caracteres acentuados (ç, ã, õ, á, é, í, ó, ú, â, ê).");
+          ImGui::BulletText("A troca de idioma é aplicada em tempo real durante a gameplay.");
+          ImGui::BulletText("Configuração salva no zelda3.ini e mantida automaticamente.");
         }
+        EndCard();
 
-        ImGui::Spacing();
-        ImGui::TextWrapped("Dica: Para o idioma em português, o jogo utiliza as fontes acentuadas e os diálogos extraídos da sua cópia brasileira.");
-
+        grid.End();
         ImGui::EndTabItem();
       }
 
-      // TAB 4: MELHORIAS (QOL)
+      // TAB 3: MELHORIAS (QOL)
       ImGuiTabItemFlags tab3_flags = (s_requested_tab == 3) ? ImGuiTabItemFlags_SetSelected : 0;
       if (ImGui::BeginTabItem("Melhorias (QoL)", nullptr, tab3_flags)) {
         s_active_tab = 3;
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "Recursos Modernos de Jogabilidade");
-        ImGui::Separator();
+
+        float avail_w = ImGui::GetContentRegionAvail().x;
+        CardGrid grid;
+        grid.Begin("QolGrid", avail_w);
 
         auto CheckFeature = [](const char *label, uint32_t mask) {
           bool val = (g_config.features0 & mask) != 0;
@@ -488,125 +622,180 @@ static void RenderOverlayWindow() {
           }
         };
 
-        // Aceleração de Diálogos
-        const char *fast_diag_modes[] = {
-          "Desativado (Original)",
-          "Ao Segurar Botão (A / B / X / Y) [Zelda Moderno]",
-          "Sempre Rápido"
-        };
-        int fd_curr = g_config.fast_dialogue;
-        if (ImGui::Combo("Acelerar Diálogos", &fd_curr, fast_diag_modes, IM_ARRAYSIZE(fast_diag_modes))) {
-          g_config.fast_dialogue = (uint8)fd_curr;
-        }
-        ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "Acelera a digitação do texto para o final da caixa e agiliza a saída do diálogo.");
-
-        if (g_config.fast_dialogue != 0) {
-          const char *speed_labels[] = {
-            "1: Suave (2x)",
-            "2: Rápida (4x)",
-            "3: Muito Rápida (8x - Recomendada)",
-            "4: Ultrarrápida (16x)",
-            "5: Instantânea (Máxima)"
+        // BLOCO 1: Diálogos Rápidos
+        grid.Next();
+        if (BeginCard("CardFastDiag", "Diálogos Acelerados (Fast Dialogue)", "Acelera o texto no estilo dos Zeldas modernos")) {
+          ImGui::Text("Modo de Diálogo:");
+          const char *fast_diag_modes[] = {
+            "Desativado (Original SNES)",
+            "Ao Segurar Botão (A/B/X/Y) [Recomendado]",
+            "Sempre Rápido"
           };
-          int spd_idx = g_config.fast_dialogue_speed ? g_config.fast_dialogue_speed - 1 : 2;
-          if (spd_idx < 0) spd_idx = 0;
-          if (spd_idx > 4) spd_idx = 4;
-          if (ImGui::Combo("Velocidade da Aceleração", &spd_idx, speed_labels, IM_ARRAYSIZE(speed_labels))) {
-            g_config.fast_dialogue_speed = (uint8)(spd_idx + 1);
+          int fd_curr = g_config.fast_dialogue;
+          ImGui::SetNextItemWidth(-1.0f);
+          if (ImGui::Combo("##FdModeCombo", &fd_curr, fast_diag_modes, IM_ARRAYSIZE(fast_diag_modes))) {
+            g_config.fast_dialogue = (uint8)fd_curr;
           }
-          ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "Define a velocidade de digitação das letras e rolamento das linhas ao acelerar.");
+          ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "Acelera a digitação até o final da caixa ao segurar um botão de ação.");
+
+          if (g_config.fast_dialogue != 0) {
+            ImGui::Spacing();
+            ImGui::Text("Velocidade da Aceleração:");
+            const char *speed_labels[] = {
+              "1: Suave (2x)",
+              "2: Rápida (4x)",
+              "3: Muito Rápida (8x - Padrão)",
+              "4: Ultrarrápida (16x)",
+              "5: Instantânea (Máxima)"
+            };
+            int spd_idx = g_config.fast_dialogue_speed ? g_config.fast_dialogue_speed - 1 : 2;
+            if (spd_idx < 0) spd_idx = 0;
+            if (spd_idx > 4) spd_idx = 4;
+            ImGui::SetNextItemWidth(-1.0f);
+            if (ImGui::Combo("##FdSpeedCombo", &spd_idx, speed_labels, IM_ARRAYSIZE(speed_labels))) {
+              g_config.fast_dialogue_speed = (uint8)(spd_idx + 1);
+            }
+          }
         }
-        ImGui::Spacing();
+        EndCard();
 
-        CheckFeature("Troca Rápida de Itens com botões L / R", kFeatures0_SwitchLR);
-        CheckFeature("Limitar troca rápida L/R apenas aos primeiros 4 itens", kFeatures0_SwitchLRLimit);
-        CheckFeature("Virar de direção enquanto corre com as Botas de Pégasus", kFeatures0_TurnWhileDashing);
-        CheckFeature("Espelho Mágico funciona de qualquer mundo para o Dark World", kFeatures0_MirrorToDarkworld);
-        CheckFeature("Coletar itens (rupees, corações) com a Espada", kFeatures0_CollectItemsWithSword);
-        CheckFeature("Quebrar potes atacando com a Master Sword", kFeatures0_BreakPotsWithSword);
-        CheckFeature("Desativar som contínuo (bipe) de pouca vida", kFeatures0_DisableLowHealthBeep);
-        CheckFeature("Pular introdução da Triforce pressionando qualquer botão", kFeatures0_SkipIntroOnKeypress);
-        CheckFeature("Destacar números de itens no máximo em amarelo", kFeatures0_ShowMaxItemsInYellow);
-        CheckFeature("Permitir até 4 bombas ativas ao mesmo tempo (o original limita a 2)", kFeatures0_MoreActiveBombs);
-        CheckFeature("Carteira expandida: carregar até 9999 Rupees", kFeatures0_CarryMoreRupees);
-        CheckFeature("Cancelar viagem com a Flauta/Pássaro pressionando botão X", kFeatures0_CancelBirdTravel);
-        CheckFeature("Correção de bugs visuais menores do jogo original", kFeatures0_MiscBugFixes);
+        // BLOCO 2: Controles & Ações Rápidas
+        grid.Next();
+        if (BeginCard("CardActions", "Controles & Ações Rápidas", "Facilidades de jogabilidade para o controle")) {
+          CheckFeature("Troca Rápida de Itens com botões L / R", kFeatures0_SwitchLR);
+          CheckFeature("Limitar troca rápida L/R apenas aos primeiros 4 itens", kFeatures0_SwitchLRLimit);
+          CheckFeature("Virar de direção correndo com as Botas de Pégasus", kFeatures0_TurnWhileDashing);
+          CheckFeature("Coletar itens (rupees, corações) com a Espada", kFeatures0_CollectItemsWithSword);
+          CheckFeature("Quebrar potes atacando com a Master Sword", kFeatures0_BreakPotsWithSword);
+        }
+        EndCard();
 
+        // BLOCO 3: Itens & Economia Expandida
+        grid.Next();
+        if (BeginCard("CardItems", "Itens & Economia Expandida", "Limites e capacidades estendidas")) {
+          CheckFeature("Carteira expandida: carregar até 9999 Rupees", kFeatures0_CarryMoreRupees);
+          CheckFeature("Permitir até 4 bombas ativas ao mesmo tempo", kFeatures0_MoreActiveBombs);
+          CheckFeature("Destacar números de itens no máximo em amarelo", kFeatures0_ShowMaxItemsInYellow);
+          CheckFeature("Espelho Mágico funciona de qualquer mundo para o Dark World", kFeatures0_MirrorToDarkworld);
+        }
+        EndCard();
+
+        // BLOCO 4: Conveniência & Áudio
+        grid.Next();
+        if (BeginCard("CardConvenience", "Conveniência & Correções", "Ajustes de interface e correções visuais")) {
+          CheckFeature("Desativar som contínuo (bipe) de pouca vida", kFeatures0_DisableLowHealthBeep);
+          CheckFeature("Pular introdução da Triforce pressionando qualquer botão", kFeatures0_SkipIntroOnKeypress);
+          CheckFeature("Cancelar viagem com a Flauta/Pássaro pressionando botão X", kFeatures0_CancelBirdTravel);
+          CheckFeature("Correção de bugs visuais menores do jogo original", kFeatures0_MiscBugFixes);
+        }
+        EndCard();
+
+        grid.End();
         ImGui::EndTabItem();
       }
 
-      // TAB 5: CHEATS & ESTADOS
+      // TAB 4: CHEATS & ESTADOS
       ImGuiTabItemFlags tab4_flags = (s_requested_tab == 4) ? ImGuiTabItemFlags_SetSelected : 0;
       if (ImGui::BeginTabItem("Cheats & Estados", nullptr, tab4_flags)) {
         s_active_tab = 4;
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "Ações Rápidas (Cheats)");
-        ImGui::Separator();
 
-        if (ImGui::Button("Restaurar Vida & Magia Total", ImVec2(240, 32))) {
-          PatchCommand('w');
-          SetStatus("Vida e magia restauradas ao máximo!");
+        float avail_w = ImGui::GetContentRegionAvail().x;
+        CardGrid grid;
+        grid.Begin("CheatsGrid", avail_w);
+
+        // BLOCO 1: Ações Rápidas (Cheats)
+        grid.Next();
+        if (BeginCard("CardCheats", "Ações Rápidas (Cheats)", "Trapaças para testes e facilidades")) {
+          if (ImGui::Button("Restaurar Vida & Magia Total", ImVec2(-1.0f, 34))) {
+            PatchCommand('w');
+            SetStatus("Vida e magia restauradas ao máximo!");
+          }
+
+          if (ImGui::Button("99 Bombas, 99 Flechas & 9999 Rupees", ImVec2(-1.0f, 34))) {
+            PatchCommand('W');
+            SetStatus("Itens e rupees preenchidos!");
+          }
+
+          if (ImGui::Button("Ganhar 1 Chave Pequena para a Dungeon", ImVec2(-1.0f, 34))) {
+            PatchCommand('o');
+            SetStatus("Chave adicionada ao inventário!");
+          }
+
+          if (ImGui::Button("Reiniciar Jogo (Soft Reset)", ImVec2(-1.0f, 34))) {
+            ZeldaReset(true);
+            SetStatus("Jogo reiniciado!");
+          }
         }
+        EndCard();
 
-        ImGui::SameLine();
-        if (ImGui::Button("99 Bombas, 99 Flechas & 9999 Rupees", ImVec2(280, 32))) {
-          PatchCommand('W');
-          SetStatus("Itens e rupees preenchidos!");
+        // BLOCO 2: Estados de Jogo (Save / Load State)
+        grid.Next();
+        if (BeginCard("CardStates", "Estados de Jogo (Save / Load State)", "Salvar e carregar posições instantaneamente")) {
+          ImGui::Text("Slot de Estado (SaveSlot):");
+          ImGui::SetNextItemWidth(-1.0f);
+          ImGui::SliderInt("##SaveSlotSlider", &s_selected_save_slot, 0, 9, "Slot %d");
+
+          ImGui::Spacing();
+          float btn_w = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+          if (ImGui::Button("Salvar no Slot", ImVec2(btn_w, 36))) {
+            SaveLoadSlot(kSaveLoad_Save, s_selected_save_slot);
+            char buf[64];
+            snprintf(buf, sizeof(buf), "Estado salvo no slot %d!", s_selected_save_slot);
+            SetStatus(buf);
+          }
+          ImGui::SameLine();
+          if (ImGui::Button("Carregar do Slot", ImVec2(btn_w, 36))) {
+            SaveLoadSlot(kSaveLoad_Load, s_selected_save_slot);
+            char buf[64];
+            snprintf(buf, sizeof(buf), "Estado carregado do slot %d!", s_selected_save_slot);
+            SetStatus(buf);
+          }
+
+          ImGui::Spacing();
+          ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "Atalhos rápidos no teclado:\n[F1-F10]: Carregar Estado | [Shift+F1-F10]: Salvar Estado");
         }
+        EndCard();
 
-        if (ImGui::Button("Ganhar 1 Chave Pequena para a Dungeon", ImVec2(240, 32))) {
-          PatchCommand('o');
-          SetStatus("Chave adicionada ao inventário!");
-        }
-
-        ImGui::SameLine();
-        if (ImGui::Button("Reiniciar Jogo (Soft Reset)", ImVec2(280, 32))) {
-          ZeldaReset(true);
-          SetStatus("Jogo reiniciado!");
-        }
-
-        ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "Estados de Jogo (Save / Load State)");
-        ImGui::Separator();
-
-        ImGui::SliderInt("Slot de Estado (SaveSlot)", &s_selected_save_slot, 0, 9);
-
-        if (ImGui::Button("Salvar Estado no Slot", ImVec2(200, 32))) {
-          SaveLoadSlot(kSaveLoad_Save, s_selected_save_slot);
-          char buf[64];
-          snprintf(buf, sizeof(buf), "Estado salvo no slot %d!", s_selected_save_slot);
-          SetStatus(buf);
-        }
-
-        ImGui::SameLine();
-        if (ImGui::Button("Carregar Estado do Slot", ImVec2(200, 32))) {
-          SaveLoadSlot(kSaveLoad_Load, s_selected_save_slot);
-          char buf[64];
-          snprintf(buf, sizeof(buf), "Estado carregado do slot %d!", s_selected_save_slot);
-          SetStatus(buf);
-        }
-
+        grid.End();
         ImGui::EndTabItem();
       }
 
-      // TAB 6: SOBRE
+      // TAB 5: SOBRE & CONTROLES
       ImGuiTabItemFlags tab5_flags = (s_requested_tab == 5) ? ImGuiTabItemFlags_SetSelected : 0;
       if (ImGui::BeginTabItem("Sobre", nullptr, tab5_flags)) {
         s_active_tab = 5;
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "The Legend of Zelda: A Link to the Past - PC Port");
-        ImGui::Separator();
-        ImGui::TextWrapped("Este projeto é uma reimplementação nativa em C do clássico do Super Nintendo.");
-        ImGui::Spacing();
-        ImGui::Text("Créditos do Decompilador:");
-        ImGui::BulletText("Criador Original: snesrev e contribuidores");
-        ImGui::BulletText("Repositório Oficial: https://github.com/snesrev/zelda3");
-        ImGui::Spacing();
-        ImGui::Text("Overlay Edition:");
-        ImGui::BulletText("Interface In-Game: Dear ImGui (ocornut/imgui)");
-        ImGui::BulletText("Suporte PT-BR & Overlay: kelvynzucco/zelda3-overlay");
-        ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.70f, 0.70f, 0.70f, 1.0f), "Atalho de Teclado: Pressione ESC ou F12 a qualquer momento para abrir ou fechar este menu.");
+
+        float avail_w = ImGui::GetContentRegionAvail().x;
+        CardGrid grid;
+        grid.Begin("AboutGrid", avail_w);
+
+        // BLOCO 1: Guia de Navegação
+        grid.Next();
+        if (BeginCard("CardControlsGuide", "Guia de Controles do Menu", "Como navegar em qualquer controle")) {
+          ImGui::BulletText("Abrir / Fechar Menu: Segurar Start + Select");
+          ImGui::BulletText("Alternar Abas: Botões LB e RB (ou L1 e R1)");
+          ImGui::BulletText("Navegar nos Blocos: D-Pad (Direcionais)");
+          ImGui::BulletText("Confirmar / Interagir: Botão A");
+          ImGui::BulletText("Voltar / Fechar Menu: Botão B");
+          ImGui::BulletText("Teclado: Teclas ESC ou F12 para abrir e fechar");
+        }
+        EndCard();
+
+        // BLOCO 2: Sobre o Projeto
+        grid.Next();
+        if (BeginCard("CardAboutInfo", "The Legend of Zelda: A Link to the Past", "PC Port & Overlay Edition")) {
+          ImGui::TextWrapped("Reimplementação nativa em C do clássico do Super Nintendo, com suporte a resoluções widescreen, áudio orquestrado MSU-1 e tradução PT-BR.");
+          ImGui::Spacing();
+          ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "Créditos:");
+          ImGui::BulletText("Decompilador Original: snesrev e contribuidores");
+          ImGui::BulletText("Interface & Overlay: Dear ImGui (ocornut/imgui)");
+          ImGui::BulletText("Versão PT-BR & Overlay: kelvynzucco/zelda3-overlay");
+        }
+        EndCard();
+
+        grid.End();
         ImGui::EndTabItem();
       }
 
@@ -620,7 +809,7 @@ static void RenderOverlayWindow() {
     ImGui::Separator();
 
     // Rodapé com botões de ação e status
-    if (ImGui::Button("Salvar", ImVec2(130, 32))) {
+    if (ImGui::Button("Salvar", ImVec2(130, 34))) {
       if (SaveConfigFile(NULL)) {
         SetStatus("Configurações salvas em zelda3.ini");
       } else {
@@ -631,9 +820,60 @@ static void RenderOverlayWindow() {
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("Fechar Menu (ESC / B)", ImVec2(170, 32))) {
+    if (ImGui::Button("Fechar Menu (ESC / B)", ImVec2(170, 34))) {
       Overlay_Toggle();
     }
+
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.48f, 0.16f, 0.16f, 0.85f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.68f, 0.22f, 0.22f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.85f, 0.28f, 0.28f, 1.00f));
+    if (ImGui::Button("Sair do Jogo", ImVec2(130, 34))) {
+      ImGui::OpenPopup("ConfirmExitPopup");
+    }
+    ImGui::PopStyleColor(3);
+
+    // Modal de Confirmação de Saída
+    ImVec2 center = viewport->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(440.0f * io.FontGlobalScale, 0.0f), ImGuiCond_Always);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24.0f, 20.0f));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.09f, 0.12f, 0.10f, 0.98f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.85f, 0.28f, 0.28f, 0.80f));
+
+    if (ImGui::BeginPopupModal("ConfirmExitPopup", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar)) {
+      ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.0f), "ENCERRAR O JOGO");
+      ImGui::Separator();
+      ImGui::Spacing();
+
+      ImGui::TextWrapped("Deseja realmente sair e fechar o jogo?\nO progresso salvo e as configurações serão preservados.");
+      ImGui::Spacing();
+      ImGui::Spacing();
+
+      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.16f, 0.16f, 0.90f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.75f, 0.22f, 0.22f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.90f, 0.30f, 0.30f, 1.0f));
+      if (ImGui::Button("Sim, Sair do Jogo", ImVec2(180, 36))) {
+        SaveConfigFile(NULL);
+        s_request_exit_game = true;
+        SDL_Event quit_ev;
+        quit_ev.type = SDL_QUIT;
+        SDL_PushEvent(&quit_ev);
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::PopStyleColor(3);
+
+      ImGui::SameLine();
+      if (ImGui::Button("Cancelar (B)", ImVec2(140, 36)) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        ImGui::CloseCurrentPopup();
+      }
+
+      ImGui::EndPopup();
+    }
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar(2);
 
     if (s_status_message[0] != '\0') {
       if (SDL_GetTicks() - s_status_message_time < 4000) {

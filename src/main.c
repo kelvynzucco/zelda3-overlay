@@ -770,7 +770,7 @@ int main(int argc, char** argv) {
       }
       if (Overlay_IsOpen()) {
         Overlay_ProcessEvent(&event);
-        if (event.type == SDL_QUIT)
+        if (event.type == SDL_QUIT || Overlay_ShouldExit())
           running = false;
         continue;
       }
@@ -832,6 +832,10 @@ int main(int argc, char** argv) {
     // Pausar o jogo e o áudio enquanto o Overlay estiver aberto
     bool overlay_active = Overlay_IsOpen();
     if (overlay_active) {
+      if (Overlay_ShouldExit()) {
+        running = false;
+        break;
+      }
       if (!audiopaused && device) {
         SDL_PauseAudioDevice(device, 1);
         audiopaused = true;

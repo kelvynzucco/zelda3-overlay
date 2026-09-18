@@ -44,6 +44,9 @@ int GetActualFps(void);
 int GetMasterVolume(void);
 void SetMasterVolume(int percent);
 
+// Exit game request
+bool Overlay_ShouldExit(void);
+
 #ifdef __cplusplus
 }
 #endif
