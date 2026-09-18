@@ -45,6 +45,7 @@ static void OpenOneGamepad(int i);
 static void HandleVolumeAdjustment(int volume_adjustment);
 static void LoadAssets();
 static void SwitchDirectory();
+void UpdateAutoAspectRatio(void);
 
 enum {
   kDefaultFullscreen = 0,
@@ -177,6 +178,8 @@ void SetWindowResolution(int width, int height) {
       SDL_SetWindowPosition(g_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
   }
+  if (g_config.aspect_ratio_auto)
+    UpdateAutoAspectRatio();
 }
 
 void SetFullscreenMode(int mode) {
@@ -211,17 +214,64 @@ void SetFullscreenMode(int mode) {
       SDL_SetWindowSize(g_window, g_config.window_width, g_config.window_height);
     }
   }
+  if (g_config.aspect_ratio_auto)
+    UpdateAutoAspectRatio();
+}
+
+void UpdateAutoAspectRatio(void) {
+  if (!g_window)
+    return;
+  int win_w = 0, win_h = 0;
+  SDL_GetWindowSize(g_window, &win_w, &win_h);
+  if (win_w <= 0 || win_h <= 0)
+    return;
+
+  int h = g_config.extend_y ? 240 : 224;
+  int target_extra = ((win_w * h) / win_h - 256) / 2;
+  if (target_extra < 0)
+    target_extra = 0;
+  if (target_extra > kPpuExtraLeftRight)
+    target_extra = kPpuExtraLeftRight;
+
+  g_config.extended_aspect_ratio = target_extra;
+
+  if (target_extra != 0) {
+    g_config.features0 |= (kFeatures0_ExtendScreen64 | kFeatures0_WidescreenVisualFixes);
+  } else {
+    g_config.features0 &= ~(kFeatures0_ExtendScreen64 | kFeatures0_WidescreenVisualFixes);
+  }
+
+  g_wanted_zelda_features = g_config.features0;
+  enhanced_features0 = g_config.features0;
+
+  if (g_zenv.ppu) {
+    g_zenv.ppu->extraLeftRight = target_extra;
+    g_zenv.ppu->extraLeftCur = UintMin(g_zenv.ppu->extraLeftCur, g_zenv.ppu->extraLeftRight);
+    g_zenv.ppu->extraRightCur = UintMin(g_zenv.ppu->extraRightCur, g_zenv.ppu->extraLeftRight);
+  }
+  g_snes_width = (target_extra * 2 + 256);
 }
 
 void SetAspectRatio(int mode) {
   int h = g_config.extend_y ? 240 : 224;
-  if (mode == 1) { // 16:9
+  if (mode == 0) { // Auto (Ajustar à Janela)
+    g_config.aspect_ratio_auto = true;
+    UpdateAutoAspectRatio();
+    return;
+  }
+
+  g_config.aspect_ratio_auto = false;
+  if (mode == 2) { // 16:9
     g_config.extended_aspect_ratio = (h * 16 / 9 - 256) / 2;
-  } else if (mode == 2) { // 16:10
+  } else if (mode == 3) { // 16:10
     g_config.extended_aspect_ratio = (h * 16 / 10 - 256) / 2;
-  } else if (mode == 3) { // 18:9
+  } else if (mode == 4) { // 18:9
     g_config.extended_aspect_ratio = (h * 18 / 9 - 256) / 2;
-  } else { // 4:3
+  } else if (mode == 5) { // 21:9
+    g_config.extended_aspect_ratio = (h * 21 / 9 - 256) / 2;
+  } else if (mode == 6) { // 32:9
+    g_config.extended_aspect_ratio = (h * 32 / 9 - 256) / 2;
+  } else { // 1: 4:3
     g_config.extended_aspect_ratio = 0;
   }
 
@@ -243,20 +293,28 @@ void SetAspectRatio(int mode) {
 }
 
 int GetAspectRatioIndex(void) {
+  if (g_config.aspect_ratio_auto)
+    return 0; // Auto
   if (g_config.extended_aspect_ratio == 0)
-    return 0; // 4:3
+    return 1; // 4:3
   int h = g_config.extend_y ? 240 : 224;
   int ar_16_9 = (h * 16 / 9 - 256) / 2;
   int ar_16_10 = (h * 16 / 10 - 256) / 2;
   int ar_18_9 = (h * 18 / 9 - 256) / 2;
+  int ar_21_9 = (h * 21 / 9 - 256) / 2;
+  int ar_32_9 = (h * 32 / 9 - 256) / 2;
 
   if (abs((int)g_config.extended_aspect_ratio - ar_16_9) <= 2)
-    return 1;
-  if (abs((int)g_config.extended_aspect_ratio - ar_16_10) <= 2)
     return 2;
-  if (abs((int)g_config.extended_aspect_ratio - ar_18_9) <= 2)
+  if (abs((int)g_config.extended_aspect_ratio - ar_16_10) <= 2)
     return 3;
-  return 1;
+  if (abs((int)g_config.extended_aspect_ratio - ar_18_9) <= 2)
+    return 4;
+  if (abs((int)g_config.extended_aspect_ratio - ar_21_9) <= 2)
+    return 5;
+  if (abs((int)g_config.extended_aspect_ratio - ar_32_9) <= 2)
+    return 6;
+  return 2;
 }
 
 static int g_actual_fps = 60;
@@ -306,6 +364,17 @@ static SDL_HitTestResult HitTestCallback(SDL_Window *win, const SDL_Point *pt, v
 }
 
 static void DrawPpuFrameWithPerf() {
+  if (g_config.aspect_ratio_auto) {
+    static int s_last_win_w = 0, s_last_win_h = 0;
+    int cur_w = 0, cur_h = 0;
+    SDL_GetWindowSize(g_window, &cur_w, &cur_h);
+    if (cur_w != s_last_win_w || cur_h != s_last_win_h) {
+      s_last_win_w = cur_w;
+      s_last_win_h = cur_h;
+      UpdateAutoAspectRatio();
+    }
+  }
+
   int render_scale = PpuGetCurrentRenderScale(g_zenv.ppu, g_ppu_render_flags);
   uint8 *pixel_buffer = 0;
   int pitch = 0;
@@ -450,15 +519,41 @@ static void SdlRenderer_EndDraw() {
   SDL_Rect dst = { 0, 0, win_w, win_h };
 
   if (!g_config.ignore_aspect_ratio && g_sdl_renderer_rect.w > 0 && g_sdl_renderer_rect.h > 0 && win_w > 0 && win_h > 0) {
-    int draw_w = win_w, draw_h = win_h;
-    if (draw_w * g_sdl_renderer_rect.h < draw_h * g_sdl_renderer_rect.w)
-      draw_h = draw_w * g_sdl_renderer_rect.h / g_sdl_renderer_rect.w;
-    else
-      draw_w = draw_h * g_sdl_renderer_rect.w / g_sdl_renderer_rect.h;
-    dst.x = (win_w - draw_w) >> 1;
-    dst.y = (win_h - draw_h) >> 1;
-    dst.w = draw_w;
-    dst.h = draw_h;
+    if (g_config.aspect_ratio_auto) {
+      int max_w = (kPpuExtraLeftRight * 2 + 256);
+      int min_w = 256;
+      int base_h = g_sdl_renderer_rect.h;
+      if (win_w * base_h < win_h * min_w) {
+        int draw_w = win_w;
+        int draw_h = draw_w * base_h / min_w;
+        dst.x = 0;
+        dst.y = (win_h - draw_h) >> 1;
+        dst.w = draw_w;
+        dst.h = draw_h;
+      } else if (win_w * base_h > win_h * max_w) {
+        int draw_h = win_h;
+        int draw_w = draw_h * max_w / base_h;
+        dst.x = (win_w - draw_w) >> 1;
+        dst.y = 0;
+        dst.w = draw_w;
+        dst.h = draw_h;
+      } else {
+        dst.x = 0;
+        dst.y = 0;
+        dst.w = win_w;
+        dst.h = win_h;
+      }
+    } else {
+      int draw_w = win_w, draw_h = win_h;
+      if (draw_w * g_sdl_renderer_rect.h < draw_h * g_sdl_renderer_rect.w)
+        draw_h = draw_w * g_sdl_renderer_rect.h / g_sdl_renderer_rect.w;
+      else
+        draw_w = draw_h * g_sdl_renderer_rect.w / g_sdl_renderer_rect.h;
+      dst.x = (win_w - draw_w) >> 1;
+      dst.y = (win_h - draw_h) >> 1;
+      dst.w = draw_w;
+      dst.h = draw_h;
+    }
   }
 
   SDL_RenderCopy(g_renderer, g_texture, &g_sdl_renderer_rect, &dst);
@@ -564,6 +659,9 @@ int main(int argc, char** argv) {
     return 1;
   }
   g_window = window;
+  SDL_SetWindowMinimumSize(window, 256, 224);
+  if (g_config.aspect_ratio_auto)
+    UpdateAutoAspectRatio();
   SDL_SetWindowHitTest(window, HitTestCallback, NULL);
 
   if (!g_renderer_funcs.Initialize(window))
@@ -616,6 +714,22 @@ int main(int argc, char** argv) {
 
   while(running) {
     while(SDL_PollEvent(&event)) {
+      if (event.type == SDL_WINDOWEVENT) {
+        if (event.window.event == SDL_WINDOWEVENT_RESIZED ||
+            event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+          int new_w = event.window.data1;
+          int new_h = event.window.data2;
+          uint32 flags = SDL_GetWindowFlags(g_window);
+          bool is_fs = (flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP)) != 0;
+          if (!is_fs && new_w > 0 && new_h > 0) {
+            g_config.window_width = new_w;
+            g_config.window_height = new_h;
+          }
+          if (g_config.aspect_ratio_auto) {
+            UpdateAutoAspectRatio();
+          }
+        }
+      }
       if (event.type == SDL_KEYDOWN && (event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_F12)) {
         Overlay_Toggle();
         continue;

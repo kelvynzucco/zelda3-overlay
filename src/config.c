@@ -429,16 +429,20 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       while ((s = NextDelim(&value, ',')) != NULL) {
         if (strcmp(s, "extend_y") == 0)
           h = 240, g_config.extend_y = true;
+        else if (StringEqualsNoCase(s, "auto"))
+          g_config.aspect_ratio_auto = true;
         else if (strcmp(s, "16:9") == 0)
-          g_config.extended_aspect_ratio = (h * 16 / 9 - 256) / 2;
+          g_config.aspect_ratio_auto = false, g_config.extended_aspect_ratio = (h * 16 / 9 - 256) / 2;
         else if (strcmp(s, "16:10") == 0)
-          g_config.extended_aspect_ratio = (h * 16 / 10 - 256) / 2;
+          g_config.aspect_ratio_auto = false, g_config.extended_aspect_ratio = (h * 16 / 10 - 256) / 2;
         else if (strcmp(s, "18:9") == 0)
-          g_config.extended_aspect_ratio = (h * 18 / 9 - 256) / 2;
+          g_config.aspect_ratio_auto = false, g_config.extended_aspect_ratio = (h * 18 / 9 - 256) / 2;
+        else if (strcmp(s, "21:9") == 0)
+          g_config.aspect_ratio_auto = false, g_config.extended_aspect_ratio = (h * 21 / 9 - 256) / 2;
         else if (strcmp(s, "32:9") == 0)
-          g_config.extended_aspect_ratio = (h * 32 / 9 - 256) / 2;
+          g_config.aspect_ratio_auto = false, g_config.extended_aspect_ratio = (h * 32 / 9 - 256) / 2;
         else if (strcmp(s, "4:3") == 0)
-          g_config.extended_aspect_ratio = 0;
+          g_config.aspect_ratio_auto = false, g_config.extended_aspect_ratio = 0;
         else if (strcmp(s, "unchanged_sprites") == 0)
           nospr = true;
         else if (strcmp(s, "no_visual_fixes") == 0)
@@ -446,9 +450,9 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
         else
           return false;
       }
-      if (g_config.extended_aspect_ratio && !nospr)
+      if ((g_config.aspect_ratio_auto || g_config.extended_aspect_ratio) && !nospr)
         g_config.features0 |= kFeatures0_ExtendScreen64;
-      if (g_config.extended_aspect_ratio && !novis)
+      if ((g_config.aspect_ratio_auto || g_config.extended_aspect_ratio) && !novis)
         g_config.features0 |= kFeatures0_WidescreenVisualFixes;
       return true;
     } else if (StringEqualsNoCase(key, "DisplayPerfInTitle")) {
@@ -541,6 +545,7 @@ void ParseConfigFile(const char *filename) {
   g_config.msuvolume = 100;  // default msu volume, 100%
   g_config.master_volume = 100; // default master volume, 100%
   g_config.extend_adjacent_areas = true; // default enabled for seamless widescreen
+  g_config.aspect_ratio_auto = false;
 
   if (filename == NULL)
     filename = g_config_file_path;
@@ -603,7 +608,23 @@ bool SaveConfigFile(const char *filename) {
   fprintf(f, "DisplayFPS = %d\n", g_config.display_fps ? 1 : 0);
   fprintf(f, "DisplayPerfInTitle = %d\n", g_config.display_perf_title ? 1 : 0);
   int ar_idx = GetAspectRatioIndex();
-  const char *ar_str = (ar_idx == 1) ? "16:9" : (ar_idx == 2) ? "16:10" : (ar_idx == 3) ? "18:9" : "4:3";
+  const char *ar_str;
+  if (g_config.aspect_ratio_auto)
+    ar_str = "auto";
+  else if (ar_idx == 1)
+    ar_str = "4:3";
+  else if (ar_idx == 2)
+    ar_str = "16:9";
+  else if (ar_idx == 3)
+    ar_str = "16:10";
+  else if (ar_idx == 4)
+    ar_str = "18:9";
+  else if (ar_idx == 5)
+    ar_str = "21:9";
+  else if (ar_idx == 6)
+    ar_str = "32:9";
+  else
+    ar_str = "16:9";
   if (g_config.extend_y)
     fprintf(f, "ExtendedAspectRatio = extend_y, %s\n", ar_str);
   else

@@ -200,16 +200,38 @@ static void OpenGLRenderer_EndDraw() {
   SDL_GL_GetDrawableSize(g_window, &drawable_width, &drawable_height);
   
   int viewport_width = drawable_width, viewport_height = drawable_height;
+  int viewport_x = 0, viewport_y = 0;
 
-  if (!g_config.ignore_aspect_ratio) {
-    if (viewport_width * g_draw_height < viewport_height * g_draw_width)
-      viewport_height = viewport_width * g_draw_height / g_draw_width;  // limit height
-    else
-      viewport_width = viewport_height * g_draw_width / g_draw_height;  // limit width
+  if (!g_config.ignore_aspect_ratio && g_draw_width > 0 && g_draw_height > 0 && drawable_width > 0 && drawable_height > 0) {
+    if (g_config.aspect_ratio_auto) {
+      int max_w = (kPpuExtraLeftRight * 2 + 256);
+      int min_w = 256;
+      int base_h = g_draw_height;
+      if (drawable_width * base_h < drawable_height * min_w) {
+        viewport_width = drawable_width;
+        viewport_height = viewport_width * base_h / min_w;
+        viewport_x = 0;
+        viewport_y = (drawable_height - viewport_height) >> 1;
+      } else if (drawable_width * base_h > drawable_height * max_w) {
+        viewport_height = drawable_height;
+        viewport_width = viewport_height * max_w / base_h;
+        viewport_x = (drawable_width - viewport_width) >> 1;
+        viewport_y = 0;
+      } else {
+        viewport_x = 0;
+        viewport_y = 0;
+        viewport_width = drawable_width;
+        viewport_height = drawable_height;
+      }
+    } else {
+      if (viewport_width * g_draw_height < viewport_height * g_draw_width)
+        viewport_height = viewport_width * g_draw_height / g_draw_width;  // limit height
+      else
+        viewport_width = viewport_height * g_draw_width / g_draw_height;  // limit width
+      viewport_x = (drawable_width - viewport_width) >> 1;
+      viewport_y = (drawable_height - viewport_height) >> 1;
+    }
   }
-
-  int viewport_x = (drawable_width - viewport_width) >> 1;
-  int viewport_y = (viewport_height - viewport_height) >> 1;
 
   glBindTexture(GL_TEXTURE_2D, g_texture.gl_texture);
   if (g_draw_width == g_texture.width && g_draw_height == g_texture.height) {

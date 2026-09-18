@@ -274,11 +274,22 @@ static void RenderOverlayWindow() {
         }
 
         // Aspect ratio
-        const char *ar_items[] = { "4:3 (Original SNES)", "16:9 (Widescreen)", "16:10", "18:9" };
+        const char *ar_items[] = {
+          "Auto (Ajustar à Janela / Livre)",
+          "4:3 (Original SNES)",
+          "16:9 (Widescreen)",
+          "16:10",
+          "18:9",
+          "21:9 (Ultrawide)",
+          "32:9 (Super Ultrawide)"
+        };
         int ar_current = GetAspectRatioIndex();
 
         if (ImGui::Combo("Proporção de Tela (Aspect Ratio)", &ar_current, ar_items, IM_ARRAYSIZE(ar_items))) {
           SetAspectRatio(ar_current);
+        }
+        if (g_config.aspect_ratio_auto) {
+          ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.40f, 1.0f), "Modo Livre Ativo: O jogo preenche 100% da janela sem barras pretas.");
         }
 
         bool ext_adj = g_config.extend_adjacent_areas;

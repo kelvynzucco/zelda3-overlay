@@ -35,6 +35,7 @@ void SetWindowResolution(int width, int height);
 void SetFullscreenMode(int mode);
 void SetAspectRatio(int mode);
 int GetAspectRatioIndex(void);
+void UpdateAutoAspectRatio(void);
 
 // FPS helpers
 int GetActualFps(void);
