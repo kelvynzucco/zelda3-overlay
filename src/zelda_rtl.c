@@ -157,16 +157,17 @@ static void ConfigurePpuSideSpace() {
       if (main_module_index == 14)
         is_ow_stable = (saved_module_for_menu == 9);
       else
-        is_ow_stable = (main_module_index == 9 && submodule_index == 0);
+        is_ow_stable = (main_module_index == 9 && submodule_index <= 12);
 
       if (g_config.extend_adjacent_areas && is_ow_stable) {
         extra_left = IntClamp((int)BG2HOFS_copy2, 0, kPpuExtraLeftRight);
         extra_right = IntClamp(4096 - 256 - (int)BG2HOFS_copy2, 0, kPpuExtraLeftRight);
+        extra_bottom = IntClamp(4096 - 224 - (int)BG2VOFS_copy2, 0, 16);
       } else {
         extra_left = BG2HOFS_copy2 - ow_scroll_vars0.xstart;
         extra_right = ow_scroll_vars0.xend - BG2HOFS_copy2;
+        extra_bottom = ow_scroll_vars0.yend - BG2VOFS_copy2;
       }
-      extra_bottom = ow_scroll_vars0.yend - BG2VOFS_copy2;
     }
   } else if (mod == 7) {
     // indoors, except when the light cone is in use
@@ -213,9 +214,9 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
     int mod = main_module_index;
     bool is_ow_stable;
     if (mod == 14)
-      is_ow_stable = (saved_module_for_menu == 9);
+      is_ow_stable = (saved_module_for_menu == 9 && !(submodule_index == 7 && overworld_map_state >= 4));
     else
-      is_ow_stable = (mod == 9 && submodule_index == 0);
+      is_ow_stable = (mod == 9 && submodule_index <= 12);
     g_zenv.ppu->extTilemapEnabled = (is_ow_stable && g_zenv.ppu->extraLeftRight != 0);
   }
 

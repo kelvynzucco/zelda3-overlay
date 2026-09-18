@@ -2790,12 +2790,14 @@ void Overworld_FillExtTilemap(struct Ppu *ppu) {
 
       uint16 tile_entry = 0;
 
-      if (map_col >= 0 && map_col < map_cols && map_row >= 0 && map_row < map_rows) {
+      bool is_transition = (submodule_index >= 1 && submodule_index <= 8);
+      if (!is_transition && map_col >= 0 && map_col < map_cols && map_row >= 0 && map_row < map_rows) {
         // Inside current area: use decompressed data from RAM (dung_bg2)
         uint16 map16_val = bg_src[map_row * 64 + map_col];
         tile_entry = map8[map16_val * 4 + sub_y * 2 + sub_x];
       } else if (g_config.extend_adjacent_areas) {
-        // Outside current area, terrain layer (BG2): sample from adjacent screen Map8
+        // Outside current area, or during scrolling transitions between screens:
+        // sample directly from pre-decoded Map8 cache for the entire overworld
         if (game_x >= 0 && game_x < 4096 && game_y >= 0 && game_y < 4096) {
           int qx = (game_x >> 9) & 7;
           int qy = (game_y >> 9) & 7;
