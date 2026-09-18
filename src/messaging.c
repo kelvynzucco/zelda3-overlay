@@ -2384,6 +2384,20 @@ void RenderText_Draw_CharacterTilemap() {  // 8ec97d
   text_render_state++;
 }
 
+static void GetFastDialogueParams(int *out_char_limit, int *out_scroll_passes, int *out_hold_delay) {
+  int speed = g_config.fast_dialogue_speed;
+  if (speed < 1) speed = 1;
+  if (speed > 5) speed = 5;
+  switch (speed) {
+  case 1: *out_char_limit = 2;  *out_scroll_passes = 2; *out_hold_delay = 18; break;
+  case 2: *out_char_limit = 4;  *out_scroll_passes = 3; *out_hold_delay = 14; break;
+  case 3: *out_char_limit = 8;  *out_scroll_passes = 4; *out_hold_delay = 10; break;
+  case 4: *out_char_limit = 16; *out_scroll_passes = 6; *out_hold_delay = 6;  break;
+  case 5: *out_char_limit = 64; *out_scroll_passes = 8; *out_hold_delay = 4;  break;
+  default: *out_char_limit = 8; *out_scroll_passes = 4; *out_hold_delay = 10; break;
+  }
+}
+
 void RenderText_Draw_MessageCharacters() {  // 8ec984
   bool accelerate = false;
   if (g_config.fast_dialogue == 2) {
@@ -2392,6 +2406,9 @@ void RenderText_Draw_MessageCharacters() {  // 8ec984
     accelerate = ((joypad1L_last | joypad1H_last) & 0xc0) != 0;
   }
   int chars_this_frame = 0;
+  int char_limit = 8, scroll_passes = 4, hold_delay = 10;
+  if (accelerate)
+    GetFastDialogueParams(&char_limit, &scroll_passes, &hold_delay);
 
 RESTART:;
   uint32 cmd = Text_DecodeCmd(messaging_text_buffer[dialogue_msg_read_pos],
@@ -2407,7 +2424,7 @@ RESTART:;
     dialogue_msg_read_pos += 1 + TEXTCMD_MULTIBYTE(cmd);
     if (accelerate) {
       vwf_line_speed_cur = 0;
-      if (++chars_this_frame < 8)
+      if (++chars_this_frame < char_limit)
         goto RESTART;
     } else if (vwf_line_speed_cur == 0) {
       goto RESTART;
@@ -2463,7 +2480,7 @@ RESTART:;
   case kTextCmd_3:  // VWF_SetLine
     vwf_curline = kVWF_RowPositions[TEXTCMD_CMD(cmd) - kTextCmd_1];
     vwf_flag_next_line = 1;
-    if (accelerate && chars_this_frame < 8) {
+    if (accelerate && chars_this_frame < char_limit) {
       dialogue_msg_read_pos += 1 + TEXTCMD_MULTIBYTE(cmd);
       goto RESTART;
     }
@@ -2488,14 +2505,14 @@ RESTART:;
     break;
   case kTextCmd_Sound:  // RenderText_Draw_PlaySfx
     sound_effect_2 = TEXTCMD_PARAM(cmd);
-    if (accelerate && chars_this_frame < 8) {
+    if (accelerate && chars_this_frame < char_limit) {
       dialogue_msg_read_pos += 1 + TEXTCMD_MULTIBYTE(cmd);
       goto RESTART;
     }
     goto COMMAND_DONE;
   case kTextCmd_Speed:  // RenderText_Draw_SetSpeed
     vwf_line_speed = vwf_line_speed_cur = TEXTCMD_PARAM(cmd);
-    if (accelerate && chars_this_frame < 8) {
+    if (accelerate && chars_this_frame < char_limit) {
       dialogue_msg_read_pos += 1 + TEXTCMD_MULTIBYTE(cmd);
       goto RESTART;
     }
@@ -2509,7 +2526,7 @@ RESTART:;
     } else {
       bool hold_advance = false;
       if (accelerate && ((joypad1L_last | joypad1H_last) & 0xc0)) {
-        if (++s_hold_dismiss_timer >= 12) {
+        if (++s_hold_dismiss_timer >= hold_delay) {
           hold_advance = true;
           s_hold_dismiss_timer = 0;
         }
@@ -2531,7 +2548,7 @@ RESTART:;
     } else {
       bool hold_dismiss = false;
       if (accelerate && ((joypad1L_last | joypad1H_last) & 0xc0)) {
-        if (++s_hold_dismiss_timer >= 12) {
+        if (++s_hold_dismiss_timer >= hold_delay) {
           hold_dismiss = true;
           s_hold_dismiss_timer = 0;
         }
@@ -2789,7 +2806,11 @@ bool RenderText_Draw_Scroll() {  // 8ecfe2
   } else if (g_config.fast_dialogue == 1) {
     accelerate = ((joypad1L_last | joypad1H_last) & 0xc0) != 0;
   }
-  int passes = accelerate ? 4 : 1;
+  int passes = 1;
+  if (accelerate) {
+    int dummy_c, dummy_h;
+    GetFastDialogueParams(&dummy_c, &passes, &dummy_h);
+  }
   while (passes--) {
     uint8 r2 = dialogue_scroll_speed;
     do {

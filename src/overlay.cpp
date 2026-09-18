@@ -461,6 +461,23 @@ static void RenderOverlayWindow() {
           g_config.fast_dialogue = (uint8)fd_curr;
         }
         ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "Acelera a digitação do texto para o final da caixa e agiliza a saída do diálogo.");
+
+        if (g_config.fast_dialogue != 0) {
+          const char *speed_labels[] = {
+            "1: Suave (2x)",
+            "2: Rápida (4x)",
+            "3: Muito Rápida (8x - Recomendada)",
+            "4: Ultrarrápida (16x)",
+            "5: Instantânea (Máxima)"
+          };
+          int spd_idx = g_config.fast_dialogue_speed ? g_config.fast_dialogue_speed - 1 : 2;
+          if (spd_idx < 0) spd_idx = 0;
+          if (spd_idx > 4) spd_idx = 4;
+          if (ImGui::Combo("Velocidade da Aceleração", &spd_idx, speed_labels, IM_ARRAYSIZE(speed_labels))) {
+            g_config.fast_dialogue_speed = (uint8)(spd_idx + 1);
+          }
+          ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "Define a velocidade de digitação das letras e rolamento das linhas ao acelerar.");
+        }
         ImGui::Spacing();
 
         CheckFeature("Troca Rápida de Itens com botões L / R", kFeatures0_SwitchLR);

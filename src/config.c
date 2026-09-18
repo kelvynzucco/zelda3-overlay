@@ -1,6 +1,8 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <share.h>
+#include <io.h>
+#include <fcntl.h>
 #endif
 #include <errno.h>
 #include "config.h"
@@ -499,6 +501,11 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
     } else if (StringEqualsNoCase(key, "FastDialogue")) {
       g_config.fast_dialogue = (uint8)strtol(value, (char**)NULL, 10);
       return true;
+    } else if (StringEqualsNoCase(key, "FastDialogueSpeed")) {
+      g_config.fast_dialogue_speed = (uint8)strtol(value, (char**)NULL, 10);
+      if (g_config.fast_dialogue_speed < 1) g_config.fast_dialogue_speed = 1;
+      if (g_config.fast_dialogue_speed > 5) g_config.fast_dialogue_speed = 5;
+      return true;
     }
   }
   return false;
@@ -550,6 +557,7 @@ void ParseConfigFile(const char *filename) {
   g_config.extend_adjacent_areas = true; // default enabled for seamless widescreen
   g_config.aspect_ratio_auto = false;
   g_config.fast_dialogue = 1; // default: hold button to accelerate (modern Zelda style)
+  g_config.fast_dialogue_speed = 3; // default: 8x (Muito Rápida)
 
   if (filename == NULL)
     filename = g_config_file_path;
@@ -584,6 +592,12 @@ bool SaveConfigFile(const char *filename) {
   char temp_path[1024];
   snprintf(temp_path, sizeof(temp_path), "%s.tmp", filename);
 
+#ifdef _WIN32
+  SetFileAttributesA(filename, FILE_ATTRIBUTE_NORMAL);
+  SetFileAttributesA(temp_path, FILE_ATTRIBUTE_NORMAL);
+  DeleteFileA(temp_path);
+#endif
+
   FILE *f = fopen(temp_path, "w");
   bool used_temp = true;
   if (!f) {
@@ -591,6 +605,16 @@ bool SaveConfigFile(const char *filename) {
     temp_path[0] = '\0';
 #ifdef _WIN32
     f = _fsopen(filename, "w", _SH_DENYNO);
+    if (!f) {
+      HANDLE h = CreateFileA(filename, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+      if (h != INVALID_HANDLE_VALUE) {
+        int fd = _open_osfhandle((intptr_t)h, _O_WRONLY);
+        if (fd != -1)
+          f = _fdopen(fd, "w");
+        else
+          CloseHandle(h);
+      }
+    }
 #else
     f = fopen(filename, "w");
 #endif
@@ -697,6 +721,7 @@ bool SaveConfigFile(const char *filename) {
   fprintf(f, "GameChangingBugFixes = %d\n", (g_config.features0 & kFeatures0_GameChangingBugFixes) ? 1 : 0);
   fprintf(f, "CancelBirdTravel = %d\n", (g_config.features0 & kFeatures0_CancelBirdTravel) ? 1 : 0);
   fprintf(f, "FastDialogue = %d\n", g_config.fast_dialogue);
+  fprintf(f, "FastDialogueSpeed = %d\n", g_config.fast_dialogue_speed ? g_config.fast_dialogue_speed : 3);
 
   if (g_keymap_backup_data) {
     fprintf(f, "\n%s\n", g_keymap_backup_data);

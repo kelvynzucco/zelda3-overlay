@@ -24,6 +24,7 @@
 /zelda3
 __pycache__
 *.o
+*.d
 *.tmp
 *.log
 /*.exe

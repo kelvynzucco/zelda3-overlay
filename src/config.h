@@ -72,6 +72,7 @@ typedef struct Config {
   uint8 msuvolume;
   uint8 master_volume;
   uint8 fast_dialogue;
+  uint8 fast_dialogue_speed;
   uint32 features0;
 
   const char *link_graphics;
