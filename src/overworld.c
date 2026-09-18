@@ -10,6 +10,9 @@
 #include "messaging.h"
 #include "player_oam.h"
 #include "snes/snes_regs.h"
+#include "snes/ppu.h"
+#include "config.h"
+#include "util.h"
 #include "assets.h"
 
 const uint16 kOverworld_OffsetBaseX[64] = {
@@ -2648,6 +2651,190 @@ int Decompress_bank02(uint8 *dst, const uint8 *src) {  // 82febb
       do {
         *dst++ = v;
       } while (v++, --len);
+    }
+  }
+}
+
+static uint16 s_ow_screen_map8[128][64 * 64];
+static uint8 s_ow_screen_loaded[128];
+
+static inline uint16 DecodeMap32ToMap16_Local(const uint8 *table, uint16 map32) {
+  int group = map32 >> 2;
+  int sub = map32 & 3;
+  const uint8 *ov = table + group * 6;
+  uint8 lo = ov[sub];
+  uint8 hi = (sub & 1) ? (ov[4 + (sub >> 1)] & 0xf) : (ov[4 + (sub >> 1)] >> 4);
+  return lo | (hi << 8);
+}
+
+static void EnsureQuadrantLoaded(int screen) {
+  if (screen < 0 || screen >= 128 || s_ow_screen_loaded[screen])
+    return;
+
+  const uint8 *hibytes_comp = GetOverworldHibytes(screen);
+  const uint8 *lobytes_comp = GetOverworldLobytes(screen);
+  if (!hibytes_comp || !lobytes_comp) {
+    s_ow_screen_loaded[screen] = 1;
+    return;
+  }
+
+  uint8 hibytes[1024];
+  uint8 lobytes[1024];
+  memset(hibytes, 0, sizeof(hibytes));
+  memset(lobytes, 0, sizeof(lobytes));
+  Decompress_bank02(hibytes, hibytes_comp);
+  Decompress_bank02(lobytes, lobytes_comp);
+
+  const uint16 *map8_table = GetMap16toMap8Table();
+  uint16 *dst_map8 = s_ow_screen_map8[screen];
+
+  for (int mj = 0; mj < 16; mj++) {
+    for (int mi = 0; mi < 16; mi++) {
+      int idx = mj * 16 + mi;
+      uint16 map32 = lobytes[idx] | (hibytes[idx] << 8);
+
+      uint16 m16[4];
+      m16[0] = DecodeMap32ToMap16_Local(kMap32ToMap16_0, map32);
+      m16[1] = DecodeMap32ToMap16_Local(kMap32ToMap16_1, map32);
+      m16[2] = DecodeMap32ToMap16_Local(kMap32ToMap16_2, map32);
+      m16[3] = DecodeMap32ToMap16_Local(kMap32ToMap16_3, map32);
+
+      for (int sub_y = 0; sub_y < 2; sub_y++) {
+        for (int sub_x = 0; sub_x < 2; sub_x++) {
+          int m16_idx = sub_y * 2 + sub_x;
+          uint16 t16 = m16[m16_idx];
+          const uint16 *s = map8_table + t16 * 4;
+
+          int m8_base_x = (mi * 2 + sub_x) * 2;
+          int m8_base_y = (mj * 2 + sub_y) * 2;
+
+          dst_map8[(m8_base_y + 0) * 64 + (m8_base_x + 0)] = s[0];
+          dst_map8[(m8_base_y + 0) * 64 + (m8_base_x + 1)] = s[1];
+          dst_map8[(m8_base_y + 1) * 64 + (m8_base_x + 0)] = s[2];
+          dst_map8[(m8_base_y + 1) * 64 + (m8_base_x + 1)] = s[3];
+        }
+      }
+    }
+  }
+  s_ow_screen_loaded[screen] = 1;
+}
+
+// Fill VRAM and extended tilemap with correct tile data for the widescreen viewport.
+// Writes to all visible tile columns:
+//   - VRAM pages 0-1: overwrites stale ring buffer data
+//   - ExtTilemap pages 2-3: fills overflow beyond 512px
+//
+// When Link reaches an area boundary, adjacent areas are sampled from s_ow_screen_map8
+// and rendered seamlessly by the SNES PPU hardware pipeline with full color accuracy.
+void Overworld_FillExtTilemap(struct Ppu *ppu) {
+  int extra_left = ppu->extraLeftCur;
+  int extra_right = ppu->extraRightCur;
+
+  if (extra_left == 0 && extra_right == 0)
+    return;
+
+  // Overworld terrain is strictly BG2 (layer 1). BG1 (layer 0) is the atmospheric
+  // overlay (rain, fog, clouds) which repeats seamless 2-page tiles and must never
+  // be overwritten by terrain tilemaps.
+  BgLayer *bglayer = &ppu->bgLayer[1];
+  if (!bglayer->tilemapWider)
+    return;
+
+  int total_vp = 256 + extra_left + extra_right;
+
+  bool is_big = !kOverworldMapIsSmall[BYTE(overworld_screen_index) & 0x3f];
+  int map_cols = is_big ? 64 : 32;
+  int map_rows = is_big ? 64 : 32;
+
+  const uint16 *map8 = GetMap16toMap8Table();
+
+  // Full game-level scroll positions for BG2 (terrain)
+  int game_hscroll = (int)BG2HOFS_copy2;
+  int game_vscroll = (int)BG2VOFS_copy2;
+  int area_x = ow_scroll_vars0.xstart;
+  int area_y = ow_scroll_vars0.ystart;
+
+  const uint16 *bg_src = dung_bg2;
+  uint16 tilemap_base = bglayer->tilemapAdr;
+
+  // PPU register scroll (unsigned, 10-bit) - for renderer page walk and tilemap addressing
+  uint32_t ppu_hscroll = bglayer->hScroll;
+  uint32_t ppu_vscroll = bglayer->vScroll;
+
+  // Renderer starting position (must match renderer's uint arithmetic)
+  uint32_t rx_start = (uint32_t)(ppu_hscroll - extra_left);
+  int start_page = (rx_start >> 8) & 1;
+  int start_pos = (rx_start >> 3) & 0x1f;
+
+  // Full game scroll for map data lookup
+  int gx_start = game_hscroll - extra_left;
+  int gy_top = game_vscroll;
+
+  int num_tc = (total_vp + 7) / 8 + 1;
+  int tr_count = (223 + ppu->extraBottomCur) / 8 + 2;
+
+  int cur_page = start_page;
+  int pos_in_page = start_pos;
+
+  for (int col_idx = 0; col_idx < num_tc; col_idx++) {
+    int game_x = gx_start + col_idx * 8;
+    int local_x = game_x - area_x;
+    int map_col = local_x >> 4;
+    int sub_x = (local_x >> 3) & 1;
+
+    for (int row_idx = 0; row_idx < tr_count; row_idx++) {
+      int game_y = gy_top + row_idx * 8;
+      int local_y = game_y - area_y;
+      int map_row = local_y >> 4;
+      int sub_y = (local_y >> 3) & 1;
+
+      uint16 tile_entry = 0;
+
+      if (map_col >= 0 && map_col < map_cols && map_row >= 0 && map_row < map_rows) {
+        // Inside current area: use decompressed data from RAM (dung_bg2)
+        uint16 map16_val = bg_src[map_row * 64 + map_col];
+        tile_entry = map8[map16_val * 4 + sub_y * 2 + sub_x];
+      } else if (g_config.extend_adjacent_areas) {
+        // Outside current area, terrain layer (BG2): sample from adjacent screen Map8
+        if (game_x >= 0 && game_x < 4096 && game_y >= 0 && game_y < 4096) {
+          int qx = (game_x >> 9) & 7;
+          int qy = (game_y >> 9) & 7;
+          int screen = (qy << 3) | qx;
+          if (BYTE(overworld_screen_index) & 0x40)
+            screen |= 0x40;
+
+          EnsureQuadrantLoaded(screen);
+          int sx = game_x & 0x1ff;
+          int sy = game_y & 0x1ff;
+          int tile_x = sx >> 3;
+          int tile_y = sy >> 3;
+          tile_entry = s_ow_screen_map8[screen][tile_y * 64 + tile_x];
+        }
+      }
+
+      // Tilemap address: use PPU register scroll (must match renderer)
+      uint32_t renderer_y = ppu_vscroll + row_idx * 8;
+      int tr = renderer_y >> 3;
+      int y_page = (((tr >> 5) & 1) && bglayer->tilemapHigher) ? 0x800 : 0;
+      int row_in_page = (tr & 0x1f) * 32;
+
+      if (cur_page < 2) {
+        // VRAM page 0 or 1
+        int x_page = (cur_page == 1) ? 0x400 : 0;
+        int vram_addr = tilemap_base + y_page + x_page + row_in_page + pos_in_page;
+        ppu->vram[vram_addr & 0x7fff] = tile_entry;
+      } else {
+        // ExtTilemap page 2 or 3
+        int x_page = (cur_page == 3) ? 0x400 : 0;
+        int ext_addr = y_page + x_page + row_in_page + pos_in_page;
+        ppu->extTilemap[ext_addr & 0xfff] = tile_entry;
+      }
+    }
+
+    pos_in_page++;
+    if (pos_in_page >= 32) {
+      pos_in_page = 0;
+      cur_page = (cur_page + 1) & 3;
     }
   }
 }

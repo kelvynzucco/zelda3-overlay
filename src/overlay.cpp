@@ -281,6 +281,12 @@ static void RenderOverlayWindow() {
           SetAspectRatio(ar_current);
         }
 
+        bool ext_adj = g_config.extend_adjacent_areas;
+        if (ImGui::Checkbox("Carregar Áreas Adjacentes no Limite da Tela", &ext_adj)) {
+          g_config.extend_adjacent_areas = ext_adj;
+        }
+        ImGui::TextColored(ImVec4(0.60f, 0.60f, 0.60f, 1.0f), "Elimina as barras pretas ao se aproximar das bordas do mapa em Widescreen,\ncarregando visualmente a área vizinha em tempo real.");
+
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(0.88f, 0.75f, 0.25f, 1.0f), "Filtros & Renderização");
         ImGui::Separator();

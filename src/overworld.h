@@ -4,6 +4,8 @@
 
 const uint8 *GetMap8toTileAttr();
 const uint16 *GetMap16toMap8Table();
+struct Ppu;
+void Overworld_FillExtTilemap(struct Ppu *ppu);
 bool LookupInOwEntranceTab(uint16 r0, uint16 r2);
 int LookupInOwEntranceTab2(uint16 pos);
 bool CanEnterWithTagalong(int e);

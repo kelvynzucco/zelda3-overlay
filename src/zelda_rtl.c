@@ -11,6 +11,8 @@
 #include "util.h"
 #include "audio.h"
 #include "assets.h"
+#include "config.h"
+#include "overworld.h"
 ZeldaEnv g_zenv;
 uint8 g_ram[131072];
 
@@ -147,12 +149,23 @@ static void ConfigurePpuSideSpace() {
   if (mod == 9) {
     if (main_module_index == 14 && submodule_index == 7 && overworld_map_state >= 4) {
       // World map
-      extra_left = kPpuExtraLeftRight, extra_right = kPpuExtraLeftRight;
+      extra_left = 0, extra_right = 0;
       extra_bottom = 16;
     } else {
       // outdoors
-      extra_left = BG2HOFS_copy2 - ow_scroll_vars0.xstart;
-      extra_right = ow_scroll_vars0.xend - BG2HOFS_copy2;
+      bool is_ow_stable;
+      if (main_module_index == 14)
+        is_ow_stable = (saved_module_for_menu == 9);
+      else
+        is_ow_stable = (main_module_index == 9 && submodule_index == 0);
+
+      if (g_config.extend_adjacent_areas && is_ow_stable) {
+        extra_left = IntClamp((int)BG2HOFS_copy2, 0, kPpuExtraLeftRight);
+        extra_right = IntClamp(4096 - 256 - (int)BG2HOFS_copy2, 0, kPpuExtraLeftRight);
+      } else {
+        extra_left = BG2HOFS_copy2 - ow_scroll_vars0.xstart;
+        extra_right = ow_scroll_vars0.xend - BG2HOFS_copy2;
+      }
       extra_bottom = ow_scroll_vars0.yend - BG2VOFS_copy2;
     }
   } else if (mod == 7) {
@@ -194,7 +207,24 @@ void ZeldaDrawPpuFrame(uint8 *pixel_buffer, size_t pitch, uint32 render_flags) {
       PpuSetMode7PerspectiveCorrection(g_zenv.ppu, 0, 0);
   }
 
-  ConfigurePpuSideSpace();
+  // Enable extended tilemap before the clamp check so PpuSetExtraSideSpace
+  // bypasses the tilemap_extra cap when we're on the overworld.
+  {
+    int mod = main_module_index;
+    bool is_ow_stable;
+    if (mod == 14)
+      is_ow_stable = (saved_module_for_menu == 9);
+    else
+      is_ow_stable = (mod == 9 && submodule_index == 0);
+    g_zenv.ppu->extTilemapEnabled = (is_ow_stable && g_zenv.ppu->extraLeftRight != 0);
+  }
+
+  if (g_zenv.ppu->extraLeftRight != 0 || render_flags & kPpuRenderFlags_Height240)
+    ConfigurePpuSideSpace();
+
+  // Fill extended tilemap with correct tile data for widescreen overflow
+  if (g_zenv.ppu->extTilemapEnabled)
+    Overworld_FillExtTilemap(g_zenv.ppu);
 
   int height = render_flags & kPpuRenderFlags_Height240 ? 240 : 224;
 

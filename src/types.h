@@ -9,7 +9,7 @@
 enum {
   kEnableLargeScreen = 1,
   // How much extra spacing to add on the sides
-  kPpuExtraLeftRight = kEnableLargeScreen ? 96 : 0,
+  kPpuExtraLeftRight = kEnableLargeScreen ? 320 : 0,
 };
 
 typedef uint8_t uint8;
@@ -50,6 +50,7 @@ static FORCEINLINE uint16 abs16(uint16 t) { return sign16(t) ? -t : t; }
 static FORCEINLINE uint8 abs8(uint8 t) { return sign8(t) ? -t : t; }
 static FORCEINLINE int IntMin(int a, int b) { return a < b ? a : b; }
 static FORCEINLINE int IntMax(int a, int b) { return a > b ? a : b; }
+static FORCEINLINE int IntClamp(int val, int min, int max) { return val < min ? min : (val > max ? max : val); }
 static FORCEINLINE uint UintMin(uint a, uint b) { return a < b ? a : b; }
 static FORCEINLINE uint UintMax(uint a, uint b) { return a > b ? a : b; }
 

@@ -380,6 +380,8 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
       return true;
     } else if (StringEqualsNoCase(key, "DimFlashes")) {
       return ParseBoolBit(value, &g_config.features0, kFeatures0_DimFlashes);
+    } else if (StringEqualsNoCase(key, "ExtendAdjacentAreas")) {
+      return ParseBool(value, &g_config.extend_adjacent_areas);
     }
   } else if (section == 2) {
     if (StringEqualsNoCase(key, "EnableAudio")) {
@@ -433,6 +435,8 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
           g_config.extended_aspect_ratio = (h * 16 / 10 - 256) / 2;
         else if (strcmp(s, "18:9") == 0)
           g_config.extended_aspect_ratio = (h * 18 / 9 - 256) / 2;
+        else if (strcmp(s, "32:9") == 0)
+          g_config.extended_aspect_ratio = (h * 32 / 9 - 256) / 2;
         else if (strcmp(s, "4:3") == 0)
           g_config.extended_aspect_ratio = 0;
         else if (strcmp(s, "unchanged_sprites") == 0)
@@ -456,6 +460,8 @@ static bool HandleIniConfig(int section, const char *key, char *value) {
     } else if (StringEqualsNoCase(key, "Language")) {
       g_config.language = value;
       return true;
+    } else if (StringEqualsNoCase(key, "ExtendAdjacentAreas")) {
+      return ParseBool(value, &g_config.extend_adjacent_areas);
     }
   } else if (section == 4) {
     if (StringEqualsNoCase(key, "ItemSwitchLR")) {
@@ -534,6 +540,7 @@ static char *g_keymap_backup_data = NULL;
 void ParseConfigFile(const char *filename) {
   g_config.msuvolume = 100;  // default msu volume, 100%
   g_config.master_volume = 100; // default master volume, 100%
+  g_config.extend_adjacent_areas = true; // default enabled for seamless widescreen
 
   if (filename == NULL)
     filename = g_config_file_path;
@@ -628,6 +635,7 @@ bool SaveConfigFile(const char *filename) {
   if (g_config.shader && *g_config.shader)
     fprintf(f, "Shader = %s\n", g_config.shader);
   fprintf(f, "DimFlashes = %d\n", (g_config.features0 & kFeatures0_DimFlashes) ? 1 : 0);
+  fprintf(f, "ExtendAdjacentAreas = %d\n", g_config.extend_adjacent_areas ? 1 : 0);
 
   fprintf(f, "\n[Sound]\n");
   fprintf(f, "EnableAudio = %d\n", g_config.enable_audio ? 1 : 0);
